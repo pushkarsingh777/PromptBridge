@@ -1,0 +1,33 @@
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+push/
+ENV/
+
+# Data outputs & cache
+data/
+raw_docs/
+training_pairs/
+pdfs/
+*.jsonl
+*.pdf
+!requirements.txt
+
+# OS / Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
