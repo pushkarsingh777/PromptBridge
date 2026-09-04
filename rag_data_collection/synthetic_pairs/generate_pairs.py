@@ -1,12 +1,16 @@
 """
 Synthetic Query-Document Pair Generator
-Uses Google Gemini Flash (free tier) instead of Claude.
+Uses Groq (free, very fast) + batch processing (10 chunks per call).
+~20-30 minutes for 690 docs vs 8+ hours with Gemini one-by-one.
 
 Install:
-  pip install google-generativeai boto3 tqdm tiktoken
+  pip install groq boto3 tqdm tiktoken python-dotenv
+
+Get free Groq key at: https://console.groq.com  (free, no card needed)
+Add to .env: GROQ_API_KEY=your_key_here
 
 Run:
-  python generate_pairs.py --input ./raw_docs --output ./training_pairs --pairs_per_chunk 3
+  python generate_pairs.py --input ./data/raw_docs --output ./data/training_pairs
 """
 
 import os
@@ -16,22 +20,33 @@ import time
 import random
 import hashlib
 import argparse
-import boto3
 from pathlib import Path
 from datetime import datetime
 from tqdm import tqdm
+
 import tiktoken
-try:
-    from dotenv import load_dotenv, find_dotenv
-    load_dotenv(find_dotenv())
-except ImportError:
-    pass
+import boto3
+from dotenv import load_dotenv
+# pyrefly: ignore [missing-import]
+from groq import Groq
 
-import google.generativeai as genai
+# ── Load .env ─────────────────────────────────────────────────────────────────
+load_dotenv()
 
-# ── Config ────────────────────────────────────────────────────────────────────
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GROQ_API_KEY   = os.getenv("GROQ_API_KEY", "")
 TOKENIZER      = tiktoken.get_encoding("cl100k_base")
+MODEL          = "openai/gpt-oss-20b"   # fastest free Groq model
+BATCH_SIZE     = 10                        # chunks per API call
+
+# ── Groq client ───────────────────────────────────────────────────────────────
+def get_groq_client():
+    if not GROQ_API_KEY:
+        raise EnvironmentError(
+            "GROQ_API_KEY not set in .env\n"
+            "Get your free key (no card) at: https://console.groq.com\n"
+            "Then add to .env: GROQ_API_KEY=your_key_here"
+        )
+    return Groq(api_key=GROQ_API_KEY)
 
 # ── R2 client ─────────────────────────────────────────────────────────────────
 def get_r2_client():
@@ -40,154 +55,166 @@ def get_r2_client():
         endpoint_url=f"https://{os.getenv('R2_ACCOUNT_ID')}.r2.cloudflarestorage.com",
         aws_access_key_id=os.getenv("R2_ACCESS_KEY_ID"),
         aws_secret_access_key=os.getenv("R2_SECRET_ACCESS_KEY"),
-        region_name="auto",     # always "auto" for R2
+        region_name="auto",
     )
 
 R2_BUCKET = os.getenv("R2_BUCKET_NAME", "promptbridge-data")
 
-# ── Gemini setup ──────────────────────────────────────────────────────────────
-def get_gemini_model():
-    genai.configure(api_key=GEMINI_API_KEY)
-    return genai.GenerativeModel(
-        model_name="gemini-1.5-flash",
-        generation_config=genai.GenerationConfig(
-            temperature=0.7,
-            max_output_tokens=500,
-        )
-    )
-
-# ── Chunking ──────────────────────────────────────────────────────────────────
+# ── Iterative chunker ─────────────────────────────────────────────────────────
 def count_tokens(text: str) -> int:
-    return len(TOKENIZER.encode(text))
+    return len(TOKENIZER.encode(text, disallowed_special=()))
 
 def chunk_text(text: str, chunk_tokens: int = 400, overlap_tokens: int = 60) -> list[dict]:
-    """
-    Recursive character splitter with token-aware sizing.
-    Tries paragraph -> sentence -> word boundaries. Never cuts mid-sentence.
-    """
-    separators = ["\n\n", "\n", ". ", " "]
+    if not text or not text.strip():
+        return []
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    sentences = [s.strip() for s in sentences if s.strip()]
+    if not sentences:
+        return []
 
-    def split(t: str, sep_idx: int = 0) -> list[str]:
-        if count_tokens(t) <= chunk_tokens:
-            return [t]
-        if sep_idx >= len(separators):
-            words = t.split()
-            mid   = len(words) // 2
-            return split(" ".join(words[:mid])) + split(" ".join(words[mid:]))
-        sep    = separators[sep_idx]
-        parts  = t.split(sep)
-        result, buf = [], ""
-        for part in parts:
-            candidate = buf + sep + part if buf else part
-            if count_tokens(candidate) <= chunk_tokens:
-                buf = candidate
+    chunks, buf, buf_tok = [], [], 0
+
+    for sentence in sentences:
+        sent_tok = count_tokens(sentence)
+
+        if sent_tok > chunk_tokens:
+            if buf:
+                chunks.append(" ".join(buf))
+                buf, buf_tok = [], 0
+            words, word_buf, word_tok = sentence.split(), [], 0
+            for word in words:
+                w_tok = count_tokens(word + " ")
+                if word_tok + w_tok > chunk_tokens and word_buf:
+                    chunks.append(" ".join(word_buf))
+                    word_buf, word_tok = [], 0
+                word_buf.append(word)
+                word_tok += w_tok
+            if word_buf:
+                chunks.append(" ".join(word_buf))
+            continue
+
+        if buf_tok + sent_tok <= chunk_tokens:
+            buf.append(sentence)
+            buf_tok += sent_tok
+        else:
+            if buf:
+                chunks.append(" ".join(buf))
+            if overlap_tokens > 0 and buf:
+                overlap_buf, overlap_used = [], 0
+                for s in reversed(buf):
+                    s_tok = count_tokens(s)
+                    if overlap_used + s_tok <= overlap_tokens:
+                        overlap_buf.insert(0, s)
+                        overlap_used += s_tok
+                    else:
+                        break
+                buf     = overlap_buf + [sentence]
+                buf_tok = overlap_used + sent_tok
             else:
-                if buf:
-                    result.extend(split(buf, sep_idx + 1))
-                buf = part
-        if buf:
-            result.extend(split(buf, sep_idx + 1))
-        return result
+                buf, buf_tok = [sentence], sent_tok
 
-    raw_chunks = split(text)
+    if buf:
+        chunks.append(" ".join(buf))
 
-    chunks = []
-    for i, chunk in enumerate(raw_chunks):
-        if i > 0 and overlap_tokens > 0:
-            prev_words  = raw_chunks[i - 1].split()
-            overlap_txt = " ".join(prev_words[-overlap_tokens:])
-            chunk       = overlap_txt + " " + chunk
-        chunks.append({
-            "chunk_id":    hashlib.md5(chunk.encode()).hexdigest()[:10],
+    return [
+        {
+            "chunk_id":    hashlib.md5(c.encode()).hexdigest()[:10],
             "chunk_index": i,
-            "text":        chunk.strip(),
-            "token_count": count_tokens(chunk),
-        })
-    return chunks
+            "text":        c,
+            "token_count": count_tokens(c),
+        }
+        for i, c in enumerate(chunks) if c.strip()
+    ]
 
-# ── Gemini prompts ────────────────────────────────────────────────────────────
-QUERY_PROMPT = """You are building training data for a RAG system about prompt engineering and AI.
+# ── Batch query generation ────────────────────────────────────────────────────
+# Send 10 chunks in one call → get 10 sets of queries back
+# 10x fewer API calls = 10x faster
 
-Given this document chunk, generate {n} diverse user queries this chunk would perfectly answer.
+BATCH_PROMPT = """You are building training data for a RAG system about prompt engineering.
 
-Rules:
+Below are {n} numbered document chunks. For EACH chunk generate {q} diverse user queries that chunk would perfectly answer.
+
+Rules for queries:
 - Write queries a real user would actually type
-- Mix short queries (5-8 words) and longer ones (15-25 words)
-- Use different formats: questions, instructions, "how do I", "what is", "explain"
-- Cover different aspects of the chunk
+- Mix short (5-8 words) and longer (15-25 words) queries  
+- Use different formats: questions, "how do I", "what is", "explain"
 
-Document chunk:
----
-{chunk}
----
+{chunks}
 
-Respond ONLY with a JSON array of strings. No explanation, no markdown backticks:
-["query 1", "query 2", "query 3"]"""
+Respond ONLY with a JSON object mapping chunk number to array of queries.
+No explanation, no markdown:
+{{"1": ["query", "query"], "2": ["query", "query"], ...}}"""
 
-HARD_NEGATIVE_PROMPT = """Given this query and the correct document that answers it, write a DIFFERENT document that:
-- Uses similar keywords and sounds related
-- Could fool a search system into thinking it is relevant
-- But does NOT actually answer the query
+def generate_queries_batch(client: Groq, chunks: list[str], queries_per_chunk: int) -> dict[int, list[str]]:
+    """Send multiple chunks in one API call. Returns {chunk_index: [queries]}."""
+    numbered = "\n\n".join(
+        f"CHUNK {i+1}:\n---\n{chunk[:800]}\n---"
+        for i, chunk in enumerate(chunks)
+    )
 
-Query: {query}
+    prompt = BATCH_PROMPT.format(
+        n=len(chunks),
+        q=queries_per_chunk,
+        chunks=numbered
+    )
 
-Correct document:
----
-{positive}
----
-
-Write only the hard negative text. No labels, no explanation. 2-3 paragraphs."""
-
-def generate_queries(model, chunk: str, n: int) -> list[str]:
     try:
-        response = model.generate_content(
-            QUERY_PROMPT.format(chunk=chunk[:2000], n=n)
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=2000,
         )
-        text = re.sub(r"```json|```", "", response.text).strip()
-        queries = json.loads(text)
-        return [q for q in queries if isinstance(q, str) and len(q) > 5]
+        raw = response.choices[0].message.content.strip()
+        raw = re.sub(r"```json|```", "", raw).strip()
+        result = json.loads(raw)
+
+        # Normalize keys to int
+        return {
+            int(k): [q for q in v if isinstance(q, str) and len(q) > 5]
+            for k, v in result.items()
+        }
+
     except json.JSONDecodeError:
-        match = re.search(r'\[.*?\]', response.text, re.DOTALL)
+        # Try to extract JSON object from response
+        match = re.search(r'\{.*\}', raw, re.DOTALL)
         if match:
             try:
-                return json.loads(match.group())
+                result = json.loads(match.group())
+                return {int(k): v for k, v in result.items()}
             except Exception:
                 pass
-        return []
+        return {}
+
     except Exception as e:
-        if "429" in str(e) or "quota" in str(e).lower():
-            print("  Rate limit hit -- waiting 60s...")
-            time.sleep(60)
+        err = str(e)
+        if "429" in err or "rate" in err.lower() or "limit" in err.lower():
+            print(f"  Rate limit — waiting 30s...")
+            time.sleep(30)
             try:
-                response = model.generate_content(
-                    QUERY_PROMPT.format(chunk=chunk[:2000], n=n)
+                response = client.chat.completions.create(
+                    model=MODEL,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.7,
+                    max_tokens=2000,
                 )
-                text = re.sub(r"```json|```", "", response.text).strip()
-                return json.loads(text)
+                raw = response.choices[0].message.content.strip()
+                raw = re.sub(r"```json|```", "", raw).strip()
+                return {int(k): v for k, v in json.loads(raw).items()}
             except Exception:
-                return []
-        return []
+                return {}
+        print(f"  Batch error: {e}")
+        return {}
 
-def generate_hard_negative(model, query: str, positive: str) -> str | None:
-    try:
-        response = model.generate_content(
-            HARD_NEGATIVE_PROMPT.format(query=query, positive=positive[:1000])
-        )
-        return response.text.strip()
-    except Exception as e:
-        if "429" in str(e) or "quota" in str(e).lower():
-            time.sleep(60)
-        return None
-
-# ── Load raw docs ─────────────────────────────────────────────────────────────
+# ── Load docs ─────────────────────────────────────────────────────────────────
 def load_docs(input_dir: str) -> list[dict]:
-    docs = []
     skip = {"summary.json", "pdf_summary.json", "generation_summary.json"}
+    docs = []
     for f in Path(input_dir).rglob("*.json"):
         if f.name in skip:
             continue
         try:
-            doc = json.loads(f.read_text())
+            doc = json.loads(f.read_text(encoding="utf-8"))
             if "text" in doc and len(doc["text"]) > 200:
                 docs.append(doc)
         except Exception:
@@ -197,131 +224,127 @@ def load_docs(input_dir: str) -> list[dict]:
 
 # ── Upload to R2 ──────────────────────────────────────────────────────────────
 def upload_to_r2(output_dir: Path):
+    missing = [k for k in ["R2_ACCOUNT_ID","R2_ACCESS_KEY_ID",
+                            "R2_SECRET_ACCESS_KEY","R2_BUCKET_NAME"]
+               if not os.getenv(k)]
+    if missing:
+        print(f"[R2] Missing in .env: {missing} — skipping upload")
+        return
     r2    = get_r2_client()
-    files = ["corpus.jsonl", "train_pairs.jsonl", "val_pairs.jsonl", "generation_summary.json"]
+    files = ["corpus.jsonl","train_pairs.jsonl","val_pairs.jsonl","generation_summary.json"]
     print(f"\nUploading to R2 bucket: {R2_BUCKET}")
     for filename in files:
-        local_path = output_dir / filename
-        if not local_path.exists():
+        local = output_dir / filename
+        if not local.exists():
             continue
-        r2_key = f"training_data/{filename}"
-        r2.upload_file(str(local_path), R2_BUCKET, r2_key)
-        print(f"  uploaded {filename} --> r2://{R2_BUCKET}/{r2_key}")
+        key = f"training_data/{filename}"
+        r2.upload_file(str(local), R2_BUCKET, key)
+        print(f"  uploaded {filename} -> r2://{R2_BUCKET}/{key}")
 
-# ── Main pipeline ─────────────────────────────────────────────────────────────
+# ── Main ──────────────────────────────────────────────────────────────────────
 def generate_all_pairs(args):
-    if not GEMINI_API_KEY:
-        print("ERROR: Set GEMINI_API_KEY environment variable.")
-        print("Get your free key at: https://aistudio.google.com/apikey")
-        return
-
-    model      = get_gemini_model()
+    client     = get_groq_client()
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     docs = load_docs(args.input)
     if not docs:
-        print("No documents found. Run web_scraper.py and pdf_ingestor.py first.")
+        print("No documents found. Run web_scraper.py first.")
         return
 
-    all_pairs  = []
-    all_chunks = []
-    skipped    = 0
-
-    for doc in tqdm(docs, desc="Generating pairs"):
-        chunks = chunk_text(
-            doc["text"],
-            chunk_tokens=args.chunk_tokens,
-            overlap_tokens=args.overlap_tokens,
-        )
-        if not chunks:
-            skipped += 1
+    # Step 1: Chunk all documents first
+    print("Chunking documents...")
+    all_chunks_with_meta = []
+    for doc in docs:
+        text = doc.get("text", "")
+        if not text.strip():
             continue
-
+        chunks = chunk_text(text, args.chunk_tokens, args.overlap_tokens)
+        if not chunks:
+            continue
         if len(chunks) > args.max_chunks_per_doc:
             chunks = random.sample(chunks, args.max_chunks_per_doc)
-
         for chunk in chunks:
-            chunk_meta = {
+            all_chunks_with_meta.append({
                 **chunk,
-                "doc_id":    doc["id"],
+                "doc_id":    doc.get("id", ""),
                 "doc_title": doc.get("title", ""),
                 "source":    doc.get("source", ""),
                 "url":       doc.get("url", ""),
-            }
-            all_chunks.append(chunk_meta)
+            })
 
-            queries = generate_queries(model, chunk["text"], n=args.pairs_per_chunk)
-            time.sleep(4)   # Gemini free tier: 15 req/min
+    print(f"  Total chunks: {len(all_chunks_with_meta)}")
+    estimated_calls = len(all_chunks_with_meta) // BATCH_SIZE + 1
+    print(f"  API calls needed: ~{estimated_calls} (batches of {BATCH_SIZE})")
+    print(f"  Estimated time: ~{estimated_calls * 2 // 60} minutes\n")
 
+    # Step 2: Generate queries in batches
+    all_pairs = []
+    batches   = [
+        all_chunks_with_meta[i:i + BATCH_SIZE]
+        for i in range(0, len(all_chunks_with_meta), BATCH_SIZE)
+    ]
+
+    for batch in tqdm(batches, desc="Generating pairs (batched)"):
+        chunk_texts = [c["text"] for c in batch]
+        results     = generate_queries_batch(client, chunk_texts, args.pairs_per_chunk)
+
+        for i, chunk_meta in enumerate(batch):
+            queries = results.get(i + 1, [])  # keys are 1-indexed
             for query in queries:
-                pair = {
-                    "id":           hashlib.md5((query + chunk["chunk_id"]).encode()).hexdigest()[:12],
+                all_pairs.append({
+                    "id":           hashlib.md5((query + chunk_meta["chunk_id"]).encode()).hexdigest()[:12],
                     "query":        query,
-                    "positive":     chunk["text"],
-                    "chunk_id":     chunk["chunk_id"],
-                    "doc_id":       doc["id"],
-                    "doc_title":    doc.get("title", ""),
-                    "source":       doc.get("source", ""),
+                    "positive":     chunk_meta["text"],
+                    "chunk_id":     chunk_meta["chunk_id"],
+                    "doc_id":       chunk_meta["doc_id"],
+                    "doc_title":    chunk_meta["doc_title"],
+                    "source":       chunk_meta["source"],
                     "generated_at": datetime.utcnow().isoformat(),
-                }
+                })
 
-                if args.hard_negatives and random.random() < 0.4:
-                    neg = generate_hard_negative(model, query, chunk["text"])
-                    if neg:
-                        pair["hard_negative"] = neg
-                    time.sleep(4)
+        time.sleep(1)   # Groq is fast — just 1s between batch calls
 
-                all_pairs.append(pair)
-
-    # Save corpus
-    corpus_file = output_dir / "corpus.jsonl"
-    with corpus_file.open("w") as f:
-        for chunk in all_chunks:
+    # Step 3: Save outputs
+    with (output_dir / "corpus.jsonl").open("w", encoding="utf-8") as f:
+        for chunk in all_chunks_with_meta:
             f.write(json.dumps(chunk, ensure_ascii=False) + "\n")
 
-    # Save train/val split
     random.shuffle(all_pairs)
-    split       = int(len(all_pairs) * 0.85)
-    train_pairs = all_pairs[:split]
-    val_pairs   = all_pairs[split:]
+    split = int(len(all_pairs) * 0.85)
 
     (output_dir / "train_pairs.jsonl").write_text(
-        "\n".join(json.dumps(p, ensure_ascii=False) for p in train_pairs)
+        "\n".join(json.dumps(p, ensure_ascii=False) for p in all_pairs[:split]),
+        encoding="utf-8"
     )
     (output_dir / "val_pairs.jsonl").write_text(
-        "\n".join(json.dumps(p, ensure_ascii=False) for p in val_pairs)
+        "\n".join(json.dumps(p, ensure_ascii=False) for p in all_pairs[split:]),
+        encoding="utf-8"
     )
 
-    # Save summary
     summary = {
-        "total_docs":          len(docs),
-        "skipped_docs":        skipped,
-        "total_chunks":        len(all_chunks),
-        "total_pairs":         len(all_pairs),
-        "train_pairs":         len(train_pairs),
-        "val_pairs":           len(val_pairs),
-        "with_hard_negatives": sum(1 for p in all_pairs if "hard_negative" in p),
-        "generated_at":        datetime.utcnow().isoformat(),
-        "model":               "gemini-1.5-flash",
-        "config": {
-            "chunk_tokens":    args.chunk_tokens,
-            "pairs_per_chunk": args.pairs_per_chunk,
-            "hard_negatives":  args.hard_negatives,
-        }
+        "total_docs":    len(docs),
+        "total_chunks":  len(all_chunks_with_meta),
+        "total_pairs":   len(all_pairs),
+        "train_pairs":   len(all_pairs[:split]),
+        "val_pairs":     len(all_pairs[split:]),
+        "generated_at":  datetime.utcnow().isoformat(),
+        "model":         MODEL,
+        "batch_size":    BATCH_SIZE,
     }
-    (output_dir / "generation_summary.json").write_text(json.dumps(summary, indent=2))
+    (output_dir / "generation_summary.json").write_text(
+        json.dumps(summary, indent=2), encoding="utf-8"
+    )
 
-    print("\n-- Generation Summary --")
-    print(f"  Documents processed  : {len(docs)}")
-    print(f"  Total chunks         : {len(all_chunks)}")
-    print(f"  Total pairs          : {len(all_pairs)}")
-    print(f"  Train / Val          : {len(train_pairs)} / {len(val_pairs)}")
-    print(f"  With hard negatives  : {summary['with_hard_negatives']}")
-    print(f"\n  Files saved to {output_dir}/")
-    print(f"    corpus.jsonl        <- load into Qdrant vector DB")
-    print(f"    train_pairs.jsonl   <- fine-tune your embedder")
-    print(f"    val_pairs.jsonl     <- evaluate retrieval quality")
+    print("\n── Generation Summary ──────────────────────────────")
+    print(f"  Documents   : {len(docs)}")
+    print(f"  Chunks      : {len(all_chunks_with_meta)}")
+    print(f"  Total pairs : {len(all_pairs)}")
+    print(f"  Train / Val : {len(all_pairs[:split])} / {len(all_pairs[split:])}")
+    print(f"\n  Saved to: {output_dir}/")
+    print(f"    corpus.jsonl       <- vector DB")
+    print(f"    train_pairs.jsonl  <- embedder fine-tuning")
+    print(f"    val_pairs.jsonl    <- evaluation")
 
     if args.upload_r2:
         upload_to_r2(output_dir)
@@ -329,15 +352,13 @@ def generate_all_pairs(args):
 # ── Entry point ───────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input",              default="./raw_docs")
-    parser.add_argument("--output",             default="./training_pairs")
+    parser.add_argument("--input",              default="./data/raw_docs")
+    parser.add_argument("--output",             default="./data/training_pairs")
     parser.add_argument("--chunk_tokens",       type=int, default=400)
     parser.add_argument("--overlap_tokens",     type=int, default=60)
     parser.add_argument("--pairs_per_chunk",    type=int, default=3)
-    parser.add_argument("--max_chunks_per_doc", type=int, default=20)
-    parser.add_argument("--hard_negatives",     action="store_true")
-    parser.add_argument("--upload_r2",          action="store_true",
-                        help="Upload outputs to Cloudflare R2 after generation")
+    parser.add_argument("--max_chunks_per_doc", type=int, default=15)
+    parser.add_argument("--upload_r2",          action="store_true")
     args = parser.parse_args()
     generate_all_pairs(args)
 

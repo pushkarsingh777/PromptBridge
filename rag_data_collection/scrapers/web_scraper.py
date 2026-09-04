@@ -3,7 +3,7 @@ Web Scraper — collects prompt engineering documentation
 Targets: promptingguide.ai, learnprompting.org, Anthropic docs, OpenAI docs
 
 Install:
-  pip install requests beautifulsoup4 markdownify trafilatura boto3 tqdm
+  pip install requests beautifulsoup4 trafilatura boto3 tqdm python-dotenv
 
 Run:
   python web_scraper.py --sites all --output ./raw_docs
@@ -24,12 +24,34 @@ from urllib.parse import urljoin, urlparse
 from collections import deque
 from tqdm import tqdm
 from bs4 import BeautifulSoup
-import trafilatura          # extracts clean main text from any webpage
-try:
-    from dotenv import load_dotenv, find_dotenv
-    load_dotenv(find_dotenv())
-except ImportError:
-    pass
+import trafilatura
+
+# ── Load .env ──────────────────────────────────────────────────────────────────
+from dotenv import load_dotenv
+# Finds .env in current folder or any parent folder automatically
+load_dotenv()
+
+# ── Validate R2 credentials ───────────────────────────────────────────────────
+def check_r2_credentials():
+    missing = []
+    for key in ["R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME"]:
+        if not os.getenv(key):
+            missing.append(key)
+    if missing:
+        print(f"\n[R2 ERROR] Missing in .env file: {', '.join(missing)}")
+        print("Open your .env file and fill in these values.")
+        print("Then try uploading again.\n")
+        return False
+    return True
+
+def get_r2_client():
+    return boto3.client(
+        "s3",
+        endpoint_url=f"https://{os.getenv('R2_ACCOUNT_ID')}.r2.cloudflarestorage.com",
+        aws_access_key_id=os.getenv("R2_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.getenv("R2_SECRET_ACCESS_KEY"),
+        region_name="auto",
+    )
 
 # ── Target sites ──────────────────────────────────────────────────────────────
 SITES = {
@@ -56,16 +78,23 @@ SITES = {
 }
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; PromptBridge-RAG-Bot/1.0; research use)",
-    "Accept": "text/html,application/xhtml+xml",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
 }
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def url_to_id(url: str) -> str:
     return hashlib.md5(url.encode()).hexdigest()[:12]
 
+def normalize_url(url: str) -> str:
+    parsed = urlparse(url)
+    path   = parsed.path.rstrip("/")
+    if "docs.anthropic.com" in parsed.netloc and path.startswith("/docs/en/"):
+        path = "/en/docs/" + path[len("/docs/en/"):]
+    return f"{parsed.scheme}://{parsed.netloc}{path}"
+
 def clean_text(raw_html: str) -> str | None:
-    """Use trafilatura to extract main content, fall back to BS4."""
     text = trafilatura.extract(
         raw_html,
         include_tables=True,
@@ -74,8 +103,6 @@ def clean_text(raw_html: str) -> str | None:
     )
     if text and len(text.strip()) > 200:
         return text.strip()
-
-    # Fallback: BS4
     soup = BeautifulSoup(raw_html, "html.parser")
     for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
         tag.decompose()
@@ -84,18 +111,18 @@ def clean_text(raw_html: str) -> str | None:
     return text if len(text) > 200 else None
 
 def extract_links(html: str, base_url: str, allowed_domain: str) -> list[str]:
-    soup = BeautifulSoup(html, "html.parser")
+    soup  = BeautifulSoup(html, "html.parser")
     links = []
     for a in soup.find_all("a", href=True):
-        href = urljoin(base_url, a["href"])
+        href   = urljoin(base_url, a["href"])
         parsed = urlparse(href)
         if (
             parsed.scheme in ("http", "https")
             and allowed_domain in parsed.netloc
-            and "#" not in href
-            and not href.endswith((".png", ".jpg", ".pdf", ".zip", ".mp4"))
+            and not href.endswith((".png", ".jpg", ".jpeg", ".svg", ".pdf", ".zip", ".mp4"))
         ):
-            links.append(href.split("#")[0])
+            norm_url = normalize_url(href.split("#")[0].split("?")[0])
+            links.append(norm_url)
     return list(set(links))
 
 # ── Core crawler ──────────────────────────────────────────────────────────────
@@ -103,7 +130,8 @@ def crawl_site(name: str, config: dict, output_dir: Path) -> list[dict]:
     site_dir = output_dir / name
     site_dir.mkdir(parents=True, exist_ok=True)
 
-    queue     = deque([config["seed"]])
+    seed_url  = normalize_url(config["seed"])
+    queue     = deque([seed_url])
     visited   = set()
     collected = []
     session   = requests.Session()
@@ -118,46 +146,47 @@ def crawl_site(name: str, config: dict, output_dir: Path) -> list[dict]:
         visited.add(url)
 
         try:
-            resp = session.get(url, timeout=15)
+            resp = session.get(url, timeout=15, allow_redirects=True)
+            if resp.url != url:
+                visited.add(normalize_url(resp.url))
             if resp.status_code != 200:
                 continue
             if "text/html" not in resp.headers.get("Content-Type", ""):
                 continue
 
-            html = resp.text
-            text = clean_text(html)
+            html  = resp.text
+            text  = clean_text(html)
             if not text:
                 continue
 
-            # Extract title
             soup  = BeautifulSoup(html, "html.parser")
-            title = (soup.find("h1") or soup.find("title") or soup.find("h2"))
+            title = soup.find("h1") or soup.find("title") or soup.find("h2")
             title = title.get_text(strip=True) if title else url
 
             doc = {
-                "id":     url_to_id(url),
-                "url":    url,
-                "source": name,
-                "title":  title,
-                "text":   text,
+                "id":         url_to_id(url),
+                "url":        url,
+                "source":     name,
+                "title":      title,
+                "text":       text,
                 "scraped_at": datetime.utcnow().isoformat(),
                 "char_count": len(text),
             }
 
-            # Save individual file
-            out_file = site_dir / f"{doc['id']}.json"
-            out_file.write_text(json.dumps(doc, ensure_ascii=False, indent=2))
+            (site_dir / f"{doc['id']}.json").write_text(
+                json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
             collected.append(doc)
 
-            # Enqueue new links
-            new_links = extract_links(html, url, config["allowed_domain"])
-            for link in new_links:
+            for link in extract_links(html, url, config["allowed_domain"]):
                 if link not in visited:
                     queue.append(link)
 
             pbar.update(1)
-            time.sleep(0.5)   # polite crawl delay
+            time.sleep(0.5)
 
+        except requests.exceptions.TooManyRedirects:
+            continue
         except Exception as e:
             print(f"\nSkipped {url}: {e}")
             continue
@@ -166,23 +195,42 @@ def crawl_site(name: str, config: dict, output_dir: Path) -> list[dict]:
     print(f"  {name}: collected {len(collected)} pages")
     return collected
 
-# ── S3 upload ─────────────────────────────────────────────────────────────────
-def upload_to_s3(output_dir: Path, bucket: str):
-    s3 = boto3.client("s3")
-    files = list(output_dir.rglob("*.json"))
-    print(f"Uploading {len(files)} files to s3://{bucket}/raw_docs/web/...")
-    for f in tqdm(files, desc="Uploading"):
-        key = f"raw_docs/web/{f.relative_to(output_dir)}"
-        s3.upload_file(str(f), bucket, str(key))
-    print("Upload complete.")
+# ── R2 Upload ─────────────────────────────────────────────────────────────────
+def upload_to_r2(output_dir: Path):
+    if not check_r2_credentials():
+        return
+
+    bucket = os.getenv("R2_BUCKET_NAME")
+    r2     = get_r2_client()
+    files  = list(output_dir.rglob("*.json"))
+
+    print(f"\nUploading {len(files)} files to R2 bucket: {bucket}")
+
+    failed = []
+    for f in tqdm(files, desc="Uploading to R2"):
+        # ── FIX: use forward slashes for R2 key (Windows produces backslashes) ──
+        relative = f.relative_to(output_dir)
+        key      = "raw_docs/web/" + "/".join(relative.parts)   # always forward slashes
+
+        try:
+            r2.upload_file(str(f), bucket, key)
+        except Exception as e:
+            failed.append((str(f), str(e)))
+
+    if failed:
+        print(f"\n[WARNING] {len(failed)} files failed to upload:")
+        for path, err in failed[:5]:
+            print(f"  {path}: {err}")
+    else:
+        print(f"[R2] Upload complete. {len(files)} files in r2://{bucket}/raw_docs/web/")
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 def write_summary(output_dir: Path, all_docs: list[dict]):
     summary = {
-        "total_docs":   len(all_docs),
-        "total_chars":  sum(d["char_count"] for d in all_docs),
-        "by_source":    {},
-        "scraped_at":   datetime.utcnow().isoformat(),
+        "total_docs":  len(all_docs),
+        "total_chars": sum(d["char_count"] for d in all_docs),
+        "by_source":   {},
+        "scraped_at":  datetime.utcnow().isoformat(),
     }
     for doc in all_docs:
         s = doc["source"]
@@ -190,7 +238,9 @@ def write_summary(output_dir: Path, all_docs: list[dict]):
         summary["by_source"][s]["count"] += 1
         summary["by_source"][s]["chars"] += doc["char_count"]
 
-    (output_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+    (output_dir / "summary.json").write_text(
+        json.dumps(summary, indent=2), encoding="utf-8"
+    )
     print("\n── Scraping Summary ─────────────────────────────────")
     print(f"  Total docs  : {summary['total_docs']}")
     print(f"  Total chars : {summary['total_chars']:,}")
@@ -200,11 +250,11 @@ def write_summary(output_dir: Path, all_docs: list[dict]):
 # ── Entry point ───────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--sites",      default="all",
+    parser.add_argument("--sites",     default="all",
                         help="all | promptingguide | learnprompting | anthropic_docs | openai_cookbook")
-    parser.add_argument("--output",     default="./raw_docs")
-    parser.add_argument("--s3_bucket",  default="",    help="Upload to S3 if set")
-    parser.add_argument("--max_pages",  type=int, default=0,
+    parser.add_argument("--output",    default="./raw_docs")
+    parser.add_argument("--upload_r2", action="store_true", help="Upload to Cloudflare R2")
+    parser.add_argument("--max_pages", type=int, default=0,
                         help="Override max_pages per site (0 = use site default)")
     args = parser.parse_args()
 
@@ -215,7 +265,6 @@ def main():
         SITES if args.sites == "all"
         else {k: v for k, v in SITES.items() if k in args.sites.split(",")}
     )
-
     if not sites_to_run:
         print(f"Unknown site(s): {args.sites}. Choose from: {list(SITES.keys())}")
         return
@@ -224,13 +273,12 @@ def main():
     for name, config in sites_to_run.items():
         if args.max_pages:
             config["max_pages"] = args.max_pages
-        docs = crawl_site(name, config, output_dir)
-        all_docs.extend(docs)
+        all_docs.extend(crawl_site(name, config, output_dir))
 
     write_summary(output_dir, all_docs)
 
-    if args.s3_bucket:
-        upload_to_s3(output_dir, args.s3_bucket)
+    if args.upload_r2:
+        upload_to_r2(output_dir)
 
 if __name__ == "__main__":
     main()

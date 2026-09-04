@@ -25,7 +25,7 @@ import requests
 import tempfile
 from pathlib import Path
 from datetime import datetime
-import fitz                 # pymupdf
+import pymupdf as fitz
 import arxiv
 import boto3
 from tqdm import tqdm
@@ -53,52 +53,54 @@ def extract_pdf_text(pdf_path: str) -> dict:
     Returns structured doc with per-section metadata.
     """
     doc = fitz.open(pdf_path)
-    full_text  = []
-    sections   = []
-    char_count = 0
+    try:
+        page_count = len(doc)
+        full_text  = []
+        sections   = []
+        char_count = 0
 
-    for page_num, page in enumerate(doc):
-        blocks = page.get_text("blocks")   # returns (x0,y0,x1,y1,text,block_no,block_type)
-        page_text = ""
-        for block in blocks:
-            if block[6] == 0:              # type 0 = text (not image)
-                text = block[4].strip()
-                if text:
-                    page_text += text + "\n"
+        for page_num, page in enumerate(doc):
+            blocks = page.get_text("blocks")   # returns (x0,y0,x1,y1,text,block_no,block_type)
+            page_text = ""
+            for block in blocks:
+                if block[6] == 0:              # type 0 = text (not image)
+                    text = block[4].strip()
+                    if text:
+                        page_text += text + "\n"
 
-        # Detect section headers (short lines in ALL CAPS or title-like)
-        for line in page_text.split("\n"):
-            stripped = line.strip()
-            if (
-                len(stripped) > 3 and len(stripped) < 80
-                and (stripped.isupper() or re.match(r"^\d+\.?\s+[A-Z]", stripped))
-            ):
-                sections.append({"page": page_num + 1, "heading": stripped})
+            # Detect section headers (short lines in ALL CAPS or title-like)
+            for line in page_text.split("\n"):
+                stripped = line.strip()
+                if (
+                    len(stripped) > 3 and len(stripped) < 80
+                    and (stripped.isupper() or re.match(r"^\d+\.?\s+[A-Z]", stripped))
+                ):
+                    sections.append({"page": page_num + 1, "heading": stripped})
 
-        full_text.append(page_text)
-        char_count += len(page_text)
+            full_text.append(page_text)
+            char_count += len(page_text)
 
-    raw_text = "\n".join(full_text)
+        raw_text = "\n".join(full_text)
 
-    # Clean: remove excessive whitespace, page numbers, headers/footers
-    raw_text = re.sub(r"\n{3,}", "\n\n", raw_text)
-    raw_text = re.sub(r"(\b\d{1,3}\b)\n", "", raw_text)    # lone page numbers
-    raw_text = re.sub(r"[ \t]{3,}", " ", raw_text)
+        # Clean: remove excessive whitespace, page numbers, headers/footers
+        raw_text = re.sub(r"\n{3,}", "\n\n", raw_text)
+        raw_text = re.sub(r"(\b\d{1,3}\b)\n", "", raw_text)    # lone page numbers
+        raw_text = re.sub(r"[ \t]{3,}", " ", raw_text)
 
-    # Extract title from first page (heuristic: longest short line near top)
-    first_page_lines = [l.strip() for l in full_text[0].split("\n") if l.strip()]
-    title_candidates = [l for l in first_page_lines[:8] if 10 < len(l) < 120]
-    title = max(title_candidates, key=len) if title_candidates else Path(pdf_path).stem
+        # Extract title from first page (heuristic: longest short line near top)
+        first_page_lines = [l.strip() for l in full_text[0].split("\n") if l.strip()]
+        title_candidates = [l for l in first_page_lines[:8] if 10 < len(l) < 120]
+        title = max(title_candidates, key=len) if title_candidates else Path(pdf_path).stem
 
-    doc.close()
-
-    return {
-        "raw_text":   raw_text,
-        "title":      title,
-        "pages":      len(doc),
-        "sections":   sections,
-        "char_count": char_count,
-    }
+        return {
+            "raw_text":   raw_text,
+            "title":      title,
+            "pages":      page_count,
+            "sections":   sections,
+            "char_count": char_count,
+        }
+    finally:
+        doc.close()
 
 def pdf_to_doc(pdf_path: str, source: str = "local", metadata: dict = None) -> dict | None:
     """Convert a PDF file into a structured document dict."""
@@ -140,7 +142,8 @@ def ingest_local(input_dir: str, output_dir: Path) -> list[dict]:
         doc = pdf_to_doc(str(pdf_path), source="local_pdf")
         if doc:
             (out / f"{doc['id']}.json").write_text(
-                json.dumps(doc, ensure_ascii=False, indent=2)
+                json.dumps(doc, ensure_ascii=False, indent=2),
+                encoding="utf-8",
             )
             docs.append(doc)
 
@@ -167,14 +170,19 @@ def ingest_arxiv(query: str, max_results: int, output_dir: Path) -> list[dict]:
             safe_id = paper.entry_id.split("/")[-1].replace("/", "_")
             out_file = out / f"{safe_id}.json"
             if out_file.exists():
-                docs.append(json.loads(out_file.read_text()))
+                docs.append(json.loads(out_file.read_text(encoding="utf-8")))
                 continue
 
-            # Download to temp file
-            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-                paper.download_pdf(filename=tmp.name)
+            # Download to temp file (close handle immediately so Windows doesn't lock it)
+            tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+            tmp_path = tmp.name
+            tmp.close()
+
+            doc = None
+            try:
+                paper.download_pdf(filename=tmp_path)
                 doc = pdf_to_doc(
-                    tmp.name,
+                    tmp_path,
                     source="arxiv",
                     metadata={
                         "arxiv_id":   safe_id,
@@ -186,10 +194,15 @@ def ingest_arxiv(query: str, max_results: int, output_dir: Path) -> list[dict]:
                         "title":      paper.title,   # override extracted title with official
                     }
                 )
-                os.unlink(tmp.name)
+            finally:
+                if os.path.exists(tmp_path):
+                    try:
+                        os.unlink(tmp_path)
+                    except Exception:
+                        pass
 
             if doc:
-                out_file.write_text(json.dumps(doc, ensure_ascii=False, indent=2))
+                out_file.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
                 docs.append(doc)
 
             time.sleep(1.0)   # arXiv rate limit
@@ -213,7 +226,29 @@ def ingest_arxiv_multi(queries: list[str], max_per_query: int, output_dir: Path)
                 all_docs.append(doc)
     return all_docs
 
-# ── S3 upload ─────────────────────────────────────────────────────────────────
+# ── Storage upload ────────────────────────────────────────────────────────────
+def get_r2_client():
+    return boto3.client(
+        "s3",
+        endpoint_url=f"https://{os.getenv('R2_ACCOUNT_ID')}.r2.cloudflarestorage.com",
+        aws_access_key_id=os.getenv("R2_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.getenv("R2_SECRET_ACCESS_KEY"),
+        region_name="auto",
+    )
+
+def upload_to_r2(output_dir: Path):
+    bucket = os.getenv("R2_BUCKET_NAME")
+    if not bucket:
+        print("[R2] R2_BUCKET_NAME not set in .env — skipping R2 upload")
+        return
+    r2 = get_r2_client()
+    files = list(output_dir.rglob("*.json"))
+    print(f"\nUploading {len(files)} files to Cloudflare R2: r2://{bucket}/raw_docs/pdf/...")
+    for f in tqdm(files, desc="Uploading to R2"):
+        key = f"raw_docs/pdf/{f.relative_to(output_dir)}"
+        r2.upload_file(str(f), bucket, str(key))
+    print("[R2] PDF docs upload complete.")
+
 def upload_to_s3(output_dir: Path, bucket: str):
     s3    = boto3.client("s3")
     files = list(output_dir.rglob("*.json"))
@@ -235,7 +270,7 @@ def write_summary(output_dir: Path, all_docs: list[dict]):
         "total_pages":   sum(d.get("pages", 0) for d in all_docs),
         "ingested_at":   datetime.utcnow().isoformat(),
     }
-    (output_dir / "pdf_summary.json").write_text(json.dumps(summary, indent=2))
+    (output_dir / "pdf_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
     print("\n── PDF Ingestion Summary ─────────────────────────────")
     print(f"  Total docs   : {summary['total_docs']}")
@@ -252,7 +287,8 @@ def main():
     parser.add_argument("--query",     default="",             help="Single arXiv query (overrides defaults)")
     parser.add_argument("--max",       type=int, default=20,   help="Max papers per arXiv query")
     parser.add_argument("--output",    default="./raw_docs")
-    parser.add_argument("--s3_bucket", default="")
+    parser.add_argument("--upload_r2", action="store_true",    help="Upload to Cloudflare R2 if set")
+    parser.add_argument("--s3_bucket", default="",             help="Upload to S3 if set")
     args = parser.parse_args()
 
     output_dir = Path(args.output)
@@ -267,6 +303,9 @@ def main():
         all_docs += ingest_arxiv_multi(queries, args.max, output_dir)
 
     write_summary(output_dir, all_docs)
+
+    if args.upload_r2:
+        upload_to_r2(output_dir)
 
     if args.s3_bucket:
         upload_to_s3(output_dir, args.s3_bucket)
