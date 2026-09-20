@@ -214,12 +214,22 @@ def load_documents(input_dir: Path) -> List[Dict[str, Any]]:
     )
 
     for path in tqdm(files, desc="Loading documents", unit="doc"):
-        text = clean_text(extract_text_from_file(path))
+        raw = extract_text_from_file(path)
+        if path.suffix.lower() == ".json":
+            try:
+                record = json.loads(raw)
+            except json.JSONDecodeError:
+                record = {}
+        else:
+            record = {}
+        text = clean_text(record.get("text", raw))
         if not text:
             continue
         documents.append({
-            "doc_id": stable_id(str(path.resolve())),
-            "source": str(path.relative_to(input_dir)),
+            "doc_id": str(record.get("id") or stable_id(str(path.resolve()))),
+            "source": str(record.get("source") or path.relative_to(input_dir)),
+            "doc_title": str(record.get("title") or path.stem),
+            "url": str(record.get("url") or ""),
             "path": str(path),
             "text": text,
         })
@@ -279,6 +289,12 @@ def chunk_text(text: str, chunk_size: int = 3500, overlap: int = 350) -> List[st
     return chunks
 
 
+def is_usable_chunk(text: str) -> bool:
+    """Remove short and repeated loading/error boilerplate before it reaches the index."""
+    tokens = re.findall(r"[a-z0-9]+", text.lower())
+    return len(tokens) >= 20 and len(set(tokens)) > 2
+
+
 def build_chunks(documents: List[Dict[str, Any]], max_chunks_per_doc: int) -> List[Dict[str, Any]]:
     all_chunks: List[Dict[str, Any]] = []
 
@@ -288,11 +304,15 @@ def build_chunks(documents: List[Dict[str, Any]], max_chunks_per_doc: int) -> Li
             chunks = chunks[:max_chunks_per_doc]
 
         for index, chunk in enumerate(chunks):
+            if not is_usable_chunk(chunk):
+                continue
             chunk_id = stable_id(doc["doc_id"], str(index), chunk)
             all_chunks.append({
                 "chunk_id": chunk_id,
                 "doc_id": doc["doc_id"],
                 "source": doc["source"],
+                "doc_title": doc.get("doc_title", ""),
+                "url": doc.get("url", ""),
                 "chunk_index": index,
                 "text": chunk,
             })
@@ -713,13 +733,13 @@ def write_jsonl(path: Path, records: List[Dict[str, Any]]):
 def write_corpus(output_dir: Path, chunks: List[Dict[str, Any]]):
     records = [
         {
-            "id": chunk["chunk_id"],
+            "chunk_id": chunk["chunk_id"],
+            "chunk_index": chunk["chunk_index"],
             "text": chunk["text"],
-            "metadata": {
-                "doc_id": chunk["doc_id"],
-                "source": chunk["source"],
-                "chunk_index": chunk["chunk_index"],
-            },
+            "doc_id": chunk["doc_id"],
+            "doc_title": chunk.get("doc_title", ""),
+            "source": chunk["source"],
+            "url": chunk.get("url", ""),
         }
         for chunk in chunks
     ]

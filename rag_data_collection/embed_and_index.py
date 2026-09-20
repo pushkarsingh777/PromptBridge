@@ -1,171 +1,132 @@
-"""
-Stage 2: Embedding + Indexing
-Converts every chunk in corpus.jsonl into a vector and stores in Qdrant.
+"""Build the local PromptBridge Qdrant index from a canonical corpus.jsonl."""
 
-Runs fully LOCAL — no API needed, no cost.
-Uses sentence-transformers (free HuggingFace model).
-
-Install:
-  pip install sentence-transformers qdrant-client tqdm python-dotenv
-
-Run:
-  python embed_and_index.py --corpus ./data/training_pairs/corpus.jsonl
-"""
-
-import os
-import json
-import time
 import argparse
+import json
 from pathlib import Path
-from tqdm import tqdm
-from dotenv import load_dotenv
-# pyrefly: ignore [missing-import]
+
 from sentence_transformers import SentenceTransformer
-# pyrefly: ignore [missing-import]
 from qdrant_client import QdrantClient
-# pyrefly: ignore [missing-import]
-from qdrant_client.models import (
-    Distance, VectorParams,
-    PointStruct, PayloadSchemaType
-)
+from qdrant_client.models import Distance, PointStruct, VectorParams
+from tqdm import tqdm
 
-load_dotenv(dotenv_path="../.env")
+EMBED_MODEL = "BAAI/bge-small-en-v1.5"
+COLLECTION = "promptbridge"
+DEFAULT_BATCH_SIZE = 128
 
-# ── Config ────────────────────────────────────────────────────────────────────
-EMBED_MODEL    = "BAAI/bge-small-en-v1.5"   # free, fast, 384-dim, ~130MB
-COLLECTION     = "promptbridge"
-QDRANT_PATH    = "./data/qdrant_db"          # local folder — no server needed
-BATCH_SIZE     = 256                           # chunks to embed at once
 
-# ── Setup ─────────────────────────────────────────────────────────────────────
-def load_chunks(corpus_path: str) -> list[dict]:
-    chunks = []
-    with open(corpus_path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                chunks.append(json.loads(line))
-    print(f"  Loaded {len(chunks)} chunks from corpus")
+def project_root() -> Path:
+    return Path(__file__).resolve().parent
+
+
+def normalise_chunk(record: dict) -> dict:
+    """Accept the legacy corpus and the newer nested-metadata corpus."""
+    metadata = record.get("metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+    text = record.get("text", "")
+    chunk_id = record.get("chunk_id") or record.get("id")
+    if not isinstance(text, str) or not text.strip() or not chunk_id:
+        raise ValueError("Every corpus record requires non-empty text and chunk_id (or id).")
+    return {
+        "chunk_id": str(chunk_id),
+        "chunk_index": record.get("chunk_index", metadata.get("chunk_index", 0)),
+        "text": text.strip(),
+        "doc_id": record.get("doc_id", metadata.get("doc_id", "")),
+        "doc_title": record.get("doc_title", metadata.get("doc_title", "")),
+        "source": record.get("source", metadata.get("source", "")),
+        "url": record.get("url", metadata.get("url", "")),
+        "token_count": record.get("token_count", 0),
+    }
+
+
+def load_chunks(corpus_path: Path) -> list[dict]:
+    chunks, seen = [], set()
+    with corpus_path.open(encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, 1):
+            if not line.strip():
+                continue
+            try:
+                chunk = normalise_chunk(json.loads(line))
+            except (json.JSONDecodeError, ValueError) as exc:
+                raise ValueError(f"Invalid corpus row {line_number}: {exc}") from exc
+            if chunk["chunk_id"] not in seen:
+                chunks.append(chunk)
+                seen.add(chunk["chunk_id"])
+    if not chunks:
+        raise ValueError("Corpus contains no valid chunks.")
     return chunks
 
-def setup_qdrant(client: QdrantClient, vector_size: int):
-    """Create collection if it doesn't exist."""
-    existing = [c.name for c in client.get_collections().collections]
-    if COLLECTION in existing:
-        print(f"  Collection '{COLLECTION}' already exists — deleting and recreating")
-        client.delete_collection(COLLECTION)
+
+def select_device(requested: str) -> str:
+    if requested != "auto":
+        return requested
+    try:
+        import torch
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except ImportError:
+        return "cpu"
+
+
+def build_index(args: argparse.Namespace) -> None:
+    corpus_path = Path(args.corpus).resolve()
+    db_path = Path(args.qdrant_path).resolve()
+    chunks = load_chunks(corpus_path)
+    print(f"Loaded {len(chunks)} valid chunks from {corpus_path}")
+
+    device = select_device(args.device)
+    print(f"Loading {args.model} on {device}")
+    model = SentenceTransformer(args.model, device=device)
+    vector_size = model.get_sentence_embedding_dimension()
+    client = QdrantClient(path=str(db_path))
+
+    existing = {item.name for item in client.get_collections().collections}
+    if args.collection in existing:
+        if not args.recreate:
+            raise RuntimeError(
+                f"Collection '{args.collection}' already exists. Re-run with --recreate to replace it."
+            )
+        client.delete_collection(args.collection)
 
     client.create_collection(
-        collection_name=COLLECTION,
-        vectors_config=VectorParams(
-            size=vector_size,
-            distance=Distance.COSINE,   # cosine similarity for text
-        )
+        collection_name=args.collection,
+        vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
     )
-    print(f"  Created Qdrant collection '{COLLECTION}' (vector size: {vector_size})")
 
-def embed_and_index(args):
-    # ── Load chunks ───────────────────────────────────────────────────────────
-    chunks = load_chunks(args.corpus)
-    if not chunks:
-        print("No chunks found. Run generate_pairs.py first.")
-        return
-
-    # ── Load embedding model ──────────────────────────────────────────────────
-    print(f"\nLoading embedding model: {EMBED_MODEL}")
-    print("  (downloading ~130MB on first run — cached after that)")
-    model = SentenceTransformer(EMBED_MODEL,device="cuda")
-    vector_size = model.get_sentence_embedding_dimension()
-    print(f"  Model loaded. Vector size: {vector_size}")
-
-    # ── Setup Qdrant (local, no server needed) ────────────────────────────────
-    print(f"\nSetting up Qdrant at: {QDRANT_PATH}")
-    Path(QDRANT_PATH).mkdir(parents=True, exist_ok=True)
-    client = QdrantClient(path=QDRANT_PATH)
-    setup_qdrant(client, vector_size)
-
-    # ── Embed + index in batches ──────────────────────────────────────────────
-    print(f"\nEmbedding {len(chunks)} chunks in batches of {BATCH_SIZE}...")
-    print("  This runs on CPU — estimated 10-20 minutes for 4,534 chunks\n")
-
-    total_indexed = 0
-    batches = [
-        chunks[i:i + BATCH_SIZE]
-        for i in range(0, len(chunks), BATCH_SIZE)
-    ]
-
-    for batch in tqdm(batches, desc="Embedding + indexing"):
-        texts = [c["text"] for c in batch]
-
-        # Convert text → vectors
+    for start in tqdm(range(0, len(chunks), args.batch_size), desc="Embedding and indexing"):
+        batch = chunks[start : start + args.batch_size]
         vectors = model.encode(
-            texts,
-            batch_size=BATCH_SIZE,
+            [item["text"] for item in batch],
+            batch_size=args.batch_size,
             show_progress_bar=False,
-            normalize_embeddings=True,   # important for cosine similarity
+            normalize_embeddings=True,
         )
-
-        # Build Qdrant points
-        points = []
-        for i, (chunk, vector) in enumerate(zip(batch, vectors)):
-            points.append(PointStruct(
-                id=total_indexed + i,    # unique int ID
-                vector=vector.tolist(),
-                payload={                # metadata stored alongside vector
-                    "chunk_id":    chunk.get("chunk_id", ""),
-                    "chunk_index": chunk.get("chunk_index", 0),
-                    "text":        chunk["text"],
-                    "doc_id":      chunk.get("doc_id", ""),
-                    "doc_title":   chunk.get("doc_title", ""),
-                    "source":      chunk.get("source", ""),
-                    "url":         chunk.get("url", ""),
-                    "token_count": chunk.get("token_count", 0),
-                }
-            ))
-
-        # Upload batch to Qdrant
         client.upsert(
-            collection_name=COLLECTION,
-            points=points,
+            collection_name=args.collection,
+            points=[
+                PointStruct(id=start + offset, vector=vector.tolist(), payload=chunk)
+                for offset, (chunk, vector) in enumerate(zip(batch, vectors))
+            ],
         )
-        total_indexed += len(batch)
 
-    # ── Verify ────────────────────────────────────────────────────────────────
-    info = client.get_collection(COLLECTION)
-    print(f"\n── Indexing Complete ───────────────────────────────")
-    print(f"  Chunks indexed  : {info.points_count}")
-    print(f"  Vector size     : {vector_size}")
-    print(f"  Distance metric : cosine")
-    print(f"  Saved to        : {QDRANT_PATH}/")
+    count = client.get_collection(args.collection).points_count
+    print(f"Indexed {count} chunks into '{args.collection}' at {db_path}")
 
-    # ── Quick test search ─────────────────────────────────────────────────────
-    print(f"\nRunning test search...")
-    test_query   = "how does chain of thought prompting work"
-    query_vector = model.encode(test_query, normalize_embeddings=True).tolist()
 
-    results = client.query_points(
-    collection_name=COLLECTION,
-    query=query_vector,
-    limit=3,
-    ).points
-
-    print(f"  Query: '{test_query}'")
-    print(f"  Top 3 results:")
-    for i, r in enumerate(results):
-        print(f"\n  [{i+1}] Score: {r.score:.4f}")
-        print(f"       Source: {r.payload.get('source','')}")
-        print(f"       Title : {r.payload.get('doc_title','')[:60]}")
-        print(f"       Text  : {r.payload['text'][:120]}...")
-
-    print(f"\n  Qdrant index is ready for RAG pipeline!")
-
-# ── Entry point ───────────────────────────────────────────────────────────────
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--corpus", default="./data/training_pairs/corpus.jsonl",
-                        help="Path to corpus.jsonl from generate_pairs.py")
+def parse_args() -> argparse.Namespace:
+    root = project_root()
+    parser = argparse.ArgumentParser(description="Embed PromptBridge corpus into local Qdrant.")
+    parser.add_argument("--corpus", default=str(root / "data/training_pairs/corpus.jsonl"))
+    parser.add_argument("--qdrant-path", default=str(root / "data/qdrant_db"))
+    parser.add_argument("--collection", default=COLLECTION)
+    parser.add_argument("--model", default=EMBED_MODEL)
+    parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
+    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
+    parser.add_argument("--recreate", action="store_true", help="Delete and rebuild an existing collection.")
     args = parser.parse_args()
-    embed_and_index(args)
+    if args.batch_size < 1:
+        parser.error("--batch-size must be positive")
+    return args
+
 
 if __name__ == "__main__":
-    main()
+    build_index(parse_args())

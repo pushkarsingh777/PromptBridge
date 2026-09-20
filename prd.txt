@@ -1,0 +1,1279 @@
+Product Requirements Document (PRD)
+
+Project Name
+
+PromptBridge: An Intelligent RAG-Based Prompt Engineering and
+Optimization System
+
+Document Purpose
+
+This Product Requirements Document defines the product vision,
+objectives, functional requirements, non-functional requirements, system
+architecture, technology stack, workflows, milestones, and acceptance
+criteria for PromptBridge.
+
+PromptBridge is designed to transform vague, incomplete, or poorly
+structured user requests into clear, contextual, and optimized prompts
+by combining intent classification, semantic retrieval,
+Retrieval-Augmented Generation (RAG), Large Language Models (LLMs), and
+MLOps practices.
+
+------------------------------------------------------------------------
+
+1. Product Overview
+
+PromptBridge is an AI-powered prompt engineering platform that acts as
+an intelligent layer between users and generative AI models.
+
+A user can submit a natural-language requirement such as:
+
+“Make a prompt for detecting weeds using YOLO.”
+
+PromptBridge analyzes the request, identifies the intent and domain,
+retrieves relevant information from a knowledge base, and generates a
+structured prompt containing appropriate context, objectives,
+constraints, expected outputs, and technical details.
+
+The platform is intended to help both technical and non-technical users
+create better prompts without requiring advanced prompt engineering
+knowledge.
+
+------------------------------------------------------------------------
+
+2. Problem Statement
+
+Large Language Models can produce useful outputs, but the quality of
+their responses depends significantly on the quality of the input
+prompt.
+
+Many users:
+
+-   Do not know how to structure an effective prompt.
+-   Provide incomplete or ambiguous requirements.
+-   Fail to include important context and constraints.
+-   Receive generic or irrelevant responses.
+-   Do not know which technical details should be included.
+-   Spend significant time manually refining prompts.
+-   Lack access to domain-specific knowledge during prompt creation.
+
+A general-purpose LLM may also generate unsupported or inaccurate
+information when it lacks the required context.
+
+PromptBridge addresses these problems by combining:
+
+1.  Intent classification.
+2.  Semantic embedding generation.
+3.  Vector-based knowledge retrieval.
+4.  LLM-based prompt rewriting.
+5.  Evaluation and monitoring.
+6.  Model and experiment management.
+
+------------------------------------------------------------------------
+
+3. Product Vision
+
+To build a reliable and scalable AI prompt engineering platform that
+allows users to convert simple natural-language requirements into
+high-quality, domain-aware, and reusable prompts.
+
+------------------------------------------------------------------------
+
+4. Product Goals
+
+The primary goals are:
+
+-   Simplify prompt engineering for all users.
+-   Improve the structure and clarity of user prompts.
+-   Add relevant domain-specific context.
+-   Retrieve knowledge using semantic similarity.
+-   Reduce irrelevant and unsupported prompt content.
+-   Provide consistent and explainable prompt generation.
+-   Support multiple domains and use cases.
+-   Track model experiments and versions.
+-   Enable reproducible deployment.
+-   Monitor system and model performance.
+-   Provide a foundation for continuous improvement.
+
+------------------------------------------------------------------------
+
+5. Target Users
+
+5.1 Students
+
+Students can use PromptBridge to create prompts for learning,
+assignments, projects, research, and coding.
+
+5.2 Developers
+
+Developers can generate structured prompts for software development,
+debugging, APIs, databases, and computer vision.
+
+5.3 Researchers
+
+Researchers can create prompts for literature analysis, experimentation,
+data analysis, and technical research.
+
+5.4 Business Users
+
+Business users can convert business requirements into structured prompts
+without needing advanced AI knowledge.
+
+5.5 AI/ML Engineers
+
+AI/ML engineers can use the platform to create prompts that include
+model specifications, datasets, evaluation metrics, and deployment
+constraints.
+
+------------------------------------------------------------------------
+
+6. Product Scope
+
+6.1 In Scope
+
+-   User query submission.
+-   Intent classification.
+-   Domain identification.
+-   Query preprocessing.
+-   Semantic embedding generation.
+-   Knowledge-base retrieval.
+-   Context-aware prompt generation.
+-   Prompt improvement and rewriting.
+-   Structured prompt output.
+-   Retrieval and generation logging.
+-   Experiment tracking.
+-   Model versioning.
+-   API-based access.
+-   Containerized deployment.
+-   Automated testing and deployment.
+-   Monitoring and alerting.
+-   Future automated retraining.
+
+6.2 Out of Scope for the Initial Version
+
+-   Training a large language model from scratch.
+-   Fully autonomous deployment without quality checks.
+-   Guaranteed elimination of hallucinations.
+-   Automatic execution of generated code.
+-   Automatic access to private user data without permission.
+-   Replacement of human review for high-risk applications.
+-   Training every model continuously in real time.
+
+------------------------------------------------------------------------
+
+7. User Journey
+
+1.  The user opens the PromptBridge application.
+2.  The user enters a vague or incomplete requirement.
+3.  The request is sent to the FastAPI backend.
+4.  The system validates and preprocesses the request.
+5.  DistilBERT classifies the user’s intent.
+6.  BGE converts the query into an embedding.
+7.  Qdrant retrieves relevant knowledge chunks.
+8.  The system constructs a context-rich generation request.
+9.  Llama generates an optimized prompt.
+10. The system validates the generated output.
+11. The optimized prompt is returned to the user.
+12. The user may copy, edit, rate, or regenerate the prompt.
+13. Feedback and performance information can be stored for evaluation.
+
+------------------------------------------------------------------------
+
+8. Functional Requirements
+
+FR-01: User Query Input
+
+The system shall allow users to enter a natural-language requirement.
+
+Input examples:
+
+-   “Create a prompt for detecting weeds.”
+-   “Help me design a machine learning pipeline.”
+-   “Generate a prompt for debugging a Python API.”
+-   “Create a research prompt about RAG hallucination.”
+
+The system shall support short and long queries.
+
+FR-02: Input Validation
+
+The system shall:
+
+-   Reject empty queries.
+-   Validate input length.
+-   Handle unsupported characters safely.
+-   Prevent malformed requests.
+-   Apply basic security and rate-limit checks.
+
+FR-03: Intent Classification
+
+The system shall use an intent classification model, such as DistilBERT,
+to identify the purpose of a query.
+
+Possible intent categories may include:
+
+-   Coding.
+-   Debugging.
+-   Data Science.
+-   Machine Learning.
+-   Computer Vision.
+-   Natural Language Processing.
+-   RAG.
+-   Research.
+-   Writing.
+-   Prompt Generation.
+-   General Technical Assistance.
+
+The system should return an intent label and, where supported, a
+confidence score.
+
+FR-04: Domain Identification
+
+The system shall identify the likely domain associated with the user’s
+query.
+
+Examples:
+
+-   Agriculture.
+-   Robotics.
+-   Computer Vision.
+-   Cloud Computing.
+-   Cybersecurity.
+-   Software Engineering.
+-   Data Science.
+-   Education.
+
+Domain identification may be implemented using the intent model,
+metadata, rules, or an additional classifier.
+
+FR-05: Query Embedding
+
+The system shall use a BGE embedding model to convert the user query
+into a numerical vector.
+
+The embedding pipeline shall:
+
+-   Load the selected embedding model.
+-   Normalize or process embeddings consistently.
+-   Generate embeddings using the same configuration as the indexed
+    knowledge base.
+-   Handle embedding failures gracefully.
+
+FR-06: Knowledge Retrieval
+
+The system shall use Qdrant to retrieve relevant knowledge chunks.
+
+The retrieval process shall:
+
+-   Search using semantic similarity.
+-   Return a configurable number of top results.
+-   Support metadata filtering where available.
+-   Preserve source information.
+-   Return similarity scores when supported.
+-   Handle empty or low-quality retrieval results.
+
+FR-07: Context Construction
+
+The system shall combine the user’s query, detected intent, domain
+information, and retrieved knowledge into a structured context for the
+generation model.
+
+The context should contain:
+
+-   Original user requirement.
+-   Intent label.
+-   Domain label.
+-   Relevant knowledge.
+-   Prompt-generation instructions.
+-   Output-format requirements.
+-   Constraints and assumptions.
+
+FR-08: Prompt Generation
+
+The system shall use a Llama-based model to generate an optimized
+prompt.
+
+The generated prompt should, where appropriate, contain:
+
+-   Role or persona.
+-   Task objective.
+-   Background context.
+-   Detailed requirements.
+-   Inputs.
+-   Constraints.
+-   Expected output format.
+-   Evaluation criteria.
+-   Clarifying assumptions.
+-   Relevant examples.
+
+FR-09: Prompt Rewriting
+
+The system shall improve vague or incomplete prompts while preserving
+the user’s original intention.
+
+The system shall not introduce unrelated requirements without clearly
+identifying them as assumptions.
+
+FR-10: Output Formatting
+
+The system shall return a structured response containing, where
+available:
+
+-   Original query.
+-   Detected intent.
+-   Detected domain.
+-   Retrieved context summary.
+-   Optimized prompt.
+-   Assumptions.
+-   Suggested follow-up questions.
+-   Model or pipeline metadata.
+
+FR-11: Prompt Editing
+
+The system should allow users to edit the generated prompt before
+copying or reusing it.
+
+FR-12: Prompt Regeneration
+
+The system should allow users to request another version of the prompt
+with modified instructions, tone, detail level, or output format.
+
+FR-13: Feedback Collection
+
+The system should allow users to provide feedback such as:
+
+-   Positive rating.
+-   Negative rating.
+-   Numerical rating.
+-   Optional written feedback.
+-   Regeneration request.
+
+Feedback should be stored only according to the platform’s privacy
+policy and consent requirements.
+
+FR-14: Experiment Tracking
+
+The system shall use MLflow or an equivalent experiment-tracking system
+to record:
+
+-   Model name.
+-   Model version.
+-   Training parameters.
+-   Dataset version.
+-   Embedding configuration.
+-   Retrieval configuration.
+-   Evaluation metrics.
+-   Training loss.
+-   Validation loss.
+-   Artifact locations.
+-   Run timestamps.
+
+FR-15: Model Versioning
+
+The system shall maintain identifiable versions of trained models and
+important configuration files.
+
+The system should support:
+
+-   Candidate model versions.
+-   Approved model versions.
+-   Production model versions.
+-   Rejected model versions.
+-   Rollback to a previous approved version.
+
+FR-16: API Access
+
+The system shall expose core functionality through a FastAPI backend.
+
+Possible endpoints include:
+
+-   POST /generate-prompt
+-   POST /classify-intent
+-   POST /retrieve-context
+-   POST /regenerate-prompt
+-   POST /feedback
+-   GET /health
+-   GET /metrics
+
+Endpoint names may be revised during implementation.
+
+FR-17: Data Pipeline
+
+The system shall support a repeatable pipeline for:
+
+-   Collecting knowledge sources.
+-   Cleaning documents.
+-   Removing duplicates.
+-   Splitting documents into chunks.
+-   Generating embeddings.
+-   Storing metadata.
+-   Indexing vectors in Qdrant.
+-   Tracking data versions.
+
+FR-18: Workflow Orchestration
+
+Apache Airflow may be used to schedule and coordinate data-processing
+tasks.
+
+The workflow should support dependencies such as:
+
+Data collection -> Cleaning -> Chunking -> Embedding -> Indexing ->
+Evaluation.
+
+FR-19: Monitoring
+
+The system shall monitor, where technically supported:
+
+-   API response time.
+-   Request count.
+-   Error rate.
+-   Resource utilization.
+-   Retrieval latency.
+-   Retrieval scores.
+-   Model latency.
+-   User feedback.
+-   Input distribution changes.
+-   Output quality metrics.
+
+FR-20: Alerts
+
+The system should generate alerts when configured thresholds are
+exceeded.
+
+Examples include:
+
+-   High API error rate.
+-   Increased latency.
+-   Service unavailability.
+-   Significant retrieval-quality degradation.
+-   Model evaluation failure.
+-   Storage or infrastructure issues.
+
+FR-21: Retraining Workflow
+
+The system may support a future retraining workflow that:
+
+1.  Collects approved new data.
+2.  Validates the data.
+3.  Trains a candidate model.
+4.  Logs the run in MLflow.
+5.  Evaluates the candidate model.
+6.  Compares it with the production model.
+7.  Deploys it only if it passes quality gates.
+8.  Alerts the responsible team.
+
+Automatic retraining shall not automatically replace the production
+model without evaluation and approval rules.
+
+------------------------------------------------------------------------
+
+9. Non-Functional Requirements
+
+NFR-01: Performance
+
+The system should provide acceptable response times for normal
+workloads.
+
+Performance targets shall be finalized after baseline testing. The
+system should separately measure:
+
+-   API overhead.
+-   Intent classification latency.
+-   Embedding latency.
+-   Vector retrieval latency.
+-   LLM generation latency.
+-   Total end-to-end latency.
+
+NFR-02: Scalability
+
+The architecture should support:
+
+-   Increasing numbers of users.
+-   Larger knowledge bases.
+-   Additional domains.
+-   Multiple model versions.
+-   Independent scaling of API, retrieval, and generation services.
+
+NFR-03: Reliability
+
+The system should:
+
+-   Handle service failures gracefully.
+-   Return meaningful error messages.
+-   Avoid losing important experiment records.
+-   Support health checks.
+-   Support rollback of approved model versions.
+
+NFR-04: Security
+
+The system should:
+
+-   Validate and sanitize inputs.
+-   Protect API credentials.
+-   Use environment variables or secret-management tools.
+-   Apply authentication where required.
+-   Apply rate limiting.
+-   Restrict access to model and dataset artifacts.
+-   Avoid storing sensitive user data unnecessarily.
+
+NFR-05: Maintainability
+
+The codebase should be modular and organized into components such as:
+
+-   API layer.
+-   Intent classification.
+-   Embedding service.
+-   Retrieval service.
+-   Generation service.
+-   Data pipeline.
+-   Evaluation.
+-   Monitoring.
+-   Configuration.
+
+NFR-06: Reproducibility
+
+The system should record:
+
+-   Code version.
+-   Dataset version.
+-   Model version.
+-   Dependency versions.
+-   Configuration.
+-   Random seeds where applicable.
+-   Training parameters.
+
+NFR-07: Observability
+
+The system should provide logs, metrics, and dashboards sufficient to
+diagnose:
+
+-   Failed requests.
+-   Slow requests.
+-   Retrieval failures.
+-   Model failures.
+-   Data pipeline failures.
+-   Quality degradation.
+
+NFR-08: Usability
+
+The generated prompt should be readable, logically structured, and easy
+to copy or edit.
+
+NFR-09: Extensibility
+
+The system should allow future integration of:
+
+-   Additional embedding models.
+-   Additional LLM providers.
+-   Additional vector databases.
+-   Additional intent categories.
+-   Additional knowledge sources.
+-   Additional evaluation metrics.
+
+NFR-10: Privacy
+
+The system should clearly define what user data is stored, why it is
+stored, how long it is retained, and who can access it.
+
+------------------------------------------------------------------------
+
+10. System Architecture
+
+10.1 Inference Flow
+
+User -> FastAPI API Layer -> Input Validation -> DistilBERT Intent
+Classification -> BGE Query Embedding -> Qdrant Semantic Retrieval ->
+Context Construction -> Llama Prompt Generation -> Output Validation ->
+Optimized Prompt -> User Feedback
+
+10.2 Data and Knowledge Pipeline
+
+Knowledge Sources -> Apache Airflow -> Data Collection -> Cleaning and
+Preprocessing -> Chunking -> BGE Embedding -> Qdrant Indexing
+
+Cloudflare R2 may store:
+
+-   Raw data.
+-   Processed data.
+-   Embedding files.
+-   Model artifacts.
+-   Evaluation reports.
+-   Dataset versions.
+
+10.3 MLOps and Deployment Flow
+
+Training -> MLflow Experiment Tracking -> Model Evaluation -> Quality
+Gate -> Docker Image -> GitHub Actions -> Deployment -> Monitoring
+through Grafana
+
+10.4 Monitoring and Improvement Loop
+
+Production Monitoring -> Drift or Quality Degradation Detection ->
+Investigation -> Approved Data Collection -> Retraining Pipeline ->
+MLflow Run -> Evaluation -> Quality Gate -> Optional Deployment
+
+------------------------------------------------------------------------
+
+11. Technology Stack
+
+Data Layer
+
+-   Python.
+-   Apache Airflow.
+-   Cloudflare R2.
+-   Data cleaning and preprocessing libraries.
+
+Machine Learning Layer
+
+-   Hugging Face Transformers.
+-   DistilBERT.
+-   BGE embedding model.
+-   Llama-based LLM.
+-   Qdrant.
+-   MLflow.
+
+Serving Layer
+
+-   FastAPI.
+-   Groq or another supported LLM inference provider.
+-   Redis for caching, rate limiting, queues, or temporary state.
+
+Operations Layer
+
+-   Docker.
+-   GitHub Actions.
+-   Grafana.
+-   Git and GitHub.
+-   Linux-based deployment environment.
+
+------------------------------------------------------------------------
+
+12. Data Requirements
+
+The knowledge base may contain:
+
+-   Technical documentation.
+-   Research papers.
+-   Tutorials.
+-   Domain-specific articles.
+-   Dataset documentation.
+-   Coding guidelines.
+-   Model documentation.
+-   Prompt engineering examples.
+-   Curated domain knowledge.
+
+Each document should preferably contain metadata such as:
+
+-   Document ID.
+-   Title.
+-   Source.
+-   Domain.
+-   Topic.
+-   Version.
+-   Creation date.
+-   Update date.
+-   Chunk ID.
+-   Access or license information.
+
+Data-processing requirements include:
+
+-   Duplicate removal.
+-   Text normalization.
+-   Invalid-content filtering.
+-   Chunk-size configuration.
+-   Chunk overlap configuration.
+-   Metadata preservation.
+-   Embedding consistency.
+-   Index validation.
+
+------------------------------------------------------------------------
+
+13. Prompt Generation Guidelines
+
+The generation model should follow these principles:
+
+1.  Preserve the user’s original intent.
+2.  Avoid unnecessary complexity.
+3.  Use retrieved context when relevant.
+4.  Clearly separate facts from assumptions.
+5.  Avoid inventing technical specifications.
+6.  Ask clarifying questions when essential information is missing.
+7.  Provide a clear and reusable prompt.
+8.  Follow the requested output format.
+9.  Avoid including irrelevant knowledge.
+10. Make the final prompt understandable to the intended user.
+
+A recommended generated-prompt structure is:
+
+-   Role.
+-   Objective.
+-   Background.
+-   Inputs.
+-   Detailed task.
+-   Constraints.
+-   Expected output.
+-   Evaluation criteria.
+-   Additional instructions.
+
+------------------------------------------------------------------------
+
+14. Evaluation Strategy
+
+The system should be evaluated at multiple levels.
+
+14.1 Intent Classification Metrics
+
+-   Accuracy.
+-   Precision.
+-   Recall.
+-   F1-score.
+-   Confusion matrix.
+
+14.2 Retrieval Metrics
+
+-   Precision@K.
+-   Recall@K.
+-   Mean Reciprocal Rank.
+-   NDCG where appropriate.
+-   Retrieval latency.
+-   Human relevance judgments.
+
+14.3 Generation Metrics
+
+-   Prompt relevance.
+-   Prompt completeness.
+-   Prompt clarity.
+-   Faithfulness to retrieved context.
+-   Preservation of user intent.
+-   Hallucination or unsupported-claim rate.
+-   Human evaluation scores.
+
+14.4 System Metrics
+
+-   End-to-end latency.
+-   Throughput.
+-   API error rate.
+-   Availability.
+-   CPU and memory utilization.
+-   GPU utilization where applicable.
+-   Cache hit rate.
+
+14.5 User Metrics
+
+-   User rating.
+-   Prompt acceptance rate.
+-   Regeneration rate.
+-   Copy or export rate.
+-   User-reported issues.
+
+------------------------------------------------------------------------
+
+15. Security and Privacy Considerations
+
+The system should:
+
+-   Keep API keys outside source code.
+-   Use secure environment configuration.
+-   Avoid exposing internal prompts or credentials.
+-   Validate all incoming requests.
+-   Apply authentication and authorization where required.
+-   Limit access to private knowledge bases.
+-   Log only necessary user information.
+-   Provide a mechanism for data deletion where applicable.
+-   Protect stored model artifacts and datasets.
+-   Avoid using private user feedback for training without appropriate
+    permission.
+
+------------------------------------------------------------------------
+
+16. Deployment Requirements
+
+The application should be deployable using Docker.
+
+A possible deployment structure is:
+
+-   FastAPI service.
+-   Retrieval service.
+-   Model inference service or external inference provider.
+-   Qdrant service.
+-   Redis service.
+-   Monitoring service.
+-   Optional MLflow tracking service.
+
+GitHub Actions should automate:
+
+1.  Code checkout.
+2.  Dependency installation.
+3.  Static checks.
+4.  Unit tests.
+5.  Data or configuration validation.
+6.  Docker image build.
+7.  Security checks where available.
+8.  Deployment to the target environment.
+
+Production deployment should use environment-specific configuration and
+secrets.
+
+------------------------------------------------------------------------
+
+17. Roadmap
+
+Phase 1: Data Pipeline - Completed
+
+-   Knowledge collection.
+-   Data cleaning.
+-   Data preprocessing.
+-   Document chunking.
+-   Knowledge-base preparation.
+
+Phase 2: RAG and Model Training - In Progress
+
+-   BGE embedding pipeline.
+-   Qdrant vector indexing.
+-   Retrieval pipeline.
+-   DistilBERT intent classification.
+-   Llama prompt generation.
+-   Model training and evaluation.
+-   MLflow experiment tracking.
+
+Phase 3: Full Production - Planned
+
+-   FastAPI production deployment.
+-   Docker containerization.
+-   GitHub Actions CI/CD.
+-   Redis integration.
+-   Monitoring dashboards.
+-   RAG quality monitoring.
+-   User feedback analysis.
+-   Drift detection.
+-   Model quality gates.
+-   Controlled retraining.
+-   Alerting and rollback.
+
+------------------------------------------------------------------------
+
+18. Risks and Mitigation
+
+Risk 1: Poor Retrieval Quality
+
+Mitigation:
+
+-   Improve chunking.
+-   Tune embedding models.
+-   Add metadata filtering.
+-   Evaluate top-K retrieval.
+-   Use reranking where necessary.
+
+Risk 2: Hallucinated or Unsupported Content
+
+Mitigation:
+
+-   Provide relevant context.
+-   Use explicit generation instructions.
+-   Validate outputs.
+-   Track groundedness.
+-   Require human review for sensitive use cases.
+
+Risk 3: Model Latency
+
+Mitigation:
+
+-   Use lightweight models for classification.
+-   Cache repeated requests.
+-   Optimize embedding generation.
+-   Use efficient inference providers.
+-   Measure each pipeline stage separately.
+
+Risk 4: Model Degradation
+
+Mitigation:
+
+-   Monitor quality metrics.
+-   Track user feedback.
+-   Evaluate new models against a fixed benchmark.
+-   Use MLflow model versioning.
+-   Apply quality gates before deployment.
+
+Risk 5: Data Quality Problems
+
+Mitigation:
+
+-   Validate documents.
+-   Remove duplicates.
+-   Preserve metadata.
+-   Track data versions.
+-   Automate data-quality checks.
+
+Risk 6: Deployment Failure
+
+Mitigation:
+
+-   Use Docker.
+-   Run CI tests.
+-   Use health checks.
+-   Maintain rollback versions.
+-   Separate staging and production environments.
+
+------------------------------------------------------------------------
+
+19. Acceptance Criteria
+
+The initial release will be considered successful when:
+
+1.  A user can submit a natural-language query through the API.
+2.  Empty or invalid queries are rejected correctly.
+3.  The system returns an intent classification.
+4.  The system generates a query embedding.
+5.  Qdrant returns relevant knowledge chunks for supported queries.
+6.  The LLM generates a structured optimized prompt.
+7.  The output preserves the user’s original objective.
+8.  The system handles retrieval or model failures gracefully.
+9.  Model experiments are logged in MLflow.
+10. Model versions can be identified and compared.
+11. The application can be packaged and run using Docker.
+12. Automated tests run through the CI/CD workflow.
+13. Basic system metrics and logs are available.
+14. A quality evaluation dataset exists for regression testing.
+15. Production deployment does not occur without passing defined quality
+    checks.
+
+------------------------------------------------------------------------
+
+20. Future Enhancements
+
+Potential future enhancements include:
+
+-   Multi-language prompt generation.
+-   Voice-based query input.
+-   Personalized prompt templates.
+-   Prompt history and versioning.
+-   Multiple LLM provider support.
+-   Hybrid keyword and vector search.
+-   Reranking models.
+-   Automatic clarification questions.
+-   Domain-specific adapters.
+-   Human-in-the-loop evaluation.
+-   Advanced prompt quality scoring.
+-   Multi-agent prompt optimization.
+-   Fine-tuned domain-specific models.
+-   A web or mobile frontend.
+-   Team collaboration and shared prompt libraries.
+
+------------------------------------------------------------------------
+
+21. Success Metrics
+
+The following metrics can be used to evaluate product success after
+baseline measurement:
+
+-   Improvement in human-rated prompt quality.
+-   Reduction in prompt editing time.
+-   Increase in successful prompt acceptance.
+-   Retrieval relevance improvement.
+-   Intent classification F1-score.
+-   Reduction in unsupported generated content.
+-   API reliability.
+-   Average response latency.
+-   User satisfaction.
+-   Percentage of deployments passing automated quality gates.
+
+Exact numerical targets should be finalized after collecting baseline
+measurements.
+
+------------------------------------------------------------------------
+
+22. Final Product Summary
+
+PromptBridge is an intelligent RAG-based prompt engineering platform
+that combines:
+
+User understanding through DistilBERT, semantic retrieval through BGE
+and Qdrant, prompt generation through Llama, API serving through
+FastAPI, experiment tracking through MLflow, workflow automation through
+Airflow, artifact storage through Cloudflare R2, caching through Redis,
+containerization through Docker, CI/CD through GitHub Actions, and
+monitoring through Grafana.
+
+The platform is designed to make prompt engineering easier, more
+contextual, more reproducible, and more suitable for production use.
+
+The complete product flow is:
+
+User Query -> Intent Classification -> Semantic Embedding -> Knowledge
+Retrieval -> Context Construction -> LLM Prompt Generation -> Optimized
+Prompt -> Feedback -> Evaluation and Monitoring -> Controlled Continuous
+Improvement.## 7. User Journey
+
+1. The user enters a natural-language query.
+2. The request is sent to the FastAPI backend.
+3. The system validates and preprocesses the query.
+4. DistilBERT classifies the user's intent.
+5. Two retrieval paths run for the same query:
+   - Dense semantic retrieval using BGE-small and Qdrant.
+   - Sparse lexical retrieval using BM25.
+6. Each retrieval path returns its top 10 candidate chunks.
+7. Reciprocal Rank Fusion (RRF) combines the rankings.
+8. The fused candidate set is passed to a cross-encoder reranker.
+9. The reranker scores candidates against the query.
+10. The top 5 most relevant chunks are selected.
+11. Prompt Assembly combines:
+    - System prompt.
+    - Last 3 conversation turns from SQLite memory.
+    - Top 5 retrieved chunks.
+    - Rewritten or normalized user query.
+12. The assembled context is sent to a Llama-based LLM through Groq.
+13. The final answer is returned to the user.
+14. The conversation is saved to SQLite memory.
+15. Feedback and system metrics may be recorded for evaluation and monitoring.
+
+## 8. Core Hybrid RAG Pipeline
+
+```text
+User Query
+    |
+    v
+Intent Classifier (DistilBERT)
+    |
+    +-----------------------------+
+    |                             |
+    v                             v
+Dense Retrieval              Sparse Retrieval
+BGE-small                    BM25
+    |                             |
+    v                             v
+Qdrant Top 10                 BM25 Top 10
+    |                             |
+    +-------------+---------------+
+                  |
+                  v
+             RRF Fusion
+                  |
+                  v
+       Fused Candidate Set
+                  |
+                  v
+       Cross-Encoder Reranker
+                  |
+                  v
+              Top 5 Chunks
+                  |
+                  v
+          Prompt Assembly
+       +--------------------+
+       | System Prompt      |
+       | Last 3 Turns       |
+       | Top 5 Chunks       |
+       | Rewritten Query    |
+       +--------------------+
+                  |
+                  v
+             Groq LLM
+            Llama Model
+                  |
+                  v
+            Final Answer
+                  |
+                  v
+          SQLite Conversation
+               Memory
+```
+
+### 8.1 Intent Classification
+
+DistilBERT classifies the incoming query into supported intent categories.
+
+Initial categories may include:
+
+- Question.
+- Code.
+- Creative.
+- Analysis.
+- Task.
+
+The intent label can be used for routing, analytics, evaluation, and future retrieval configuration.
+
+### 8.2 Dense Retrieval
+
+BGE-small converts the query into an embedding, which is searched against the Qdrant vector database.
+
+```text
+User Query -> BGE-small -> Query Embedding -> Qdrant -> Top 10
+```
+
+Dense retrieval is useful for semantic similarity and paraphrased queries.
+
+### 8.3 Sparse Retrieval
+
+BM25 independently searches the same knowledge corpus using lexical/keyword matching.
+
+```text
+User Query -> BM25 -> Keyword Matching -> Top 10
+```
+
+BM25 is particularly useful for exact technical terms, model names, error messages, identifiers, and abbreviations.
+
+### 8.4 Parallel Retrieval
+
+Dense and sparse searches should run independently and, where practical, concurrently. This reduces unnecessary sequential latency and allows both retrieval methods to contribute to the same query.
+
+### 8.5 Reciprocal Rank Fusion
+
+RRF combines the ranked results from dense retrieval and BM25.
+
+The system retrieves up to 10 candidates from each path. Because the same chunk may appear in both lists, the final number of unique candidates may be less than 20.
+
+RRF is used to combine rankings rather than simply concatenating the two result lists.
+
+Conceptually:
+
+```text
+Dense Ranking
+      +
+BM25 Ranking
+      |
+      v
+RRF Score
+      |
+      v
+Fused Candidate Ranking
+```
+
+### 8.6 Cross-Encoder Reranking
+
+The fused candidates are passed to a cross-encoder reranker.
+
+For each candidate, the reranker evaluates the query and candidate chunk together and produces a relevance score.
+
+```text
+Query + Chunk 1 -> Score
+Query + Chunk 2 -> Score
+Query + Chunk 3 -> Score
+...
+Query + Chunk N -> Score
+```
+
+Candidates are sorted by relevance and the top 5 are selected for final context.
+
+This separates the retrieval and precision stages:
+
+```text
+Retrieval  = Find relevant candidates
+Reranking  = Select the most relevant candidates
+```
+
+### 8.7 Prompt Assembly
+
+The final generation context contains:
+
+```text
++--------------------------------+
+| System Prompt                  |
++--------------------------------+
+| Memory: Last 3 Conversation   |
+| Turns                          |
++--------------------------------+
+| Context: Top 5 Retrieved       |
+| Chunks                         |
++--------------------------------+
+| Rewritten / Normalized Query   |
++--------------------------------+
+```
+
+The generated context should preserve the original user intent and clearly distinguish retrieved information from assumptions.
+
+### 8.8 LLM Generation
+
+The assembled context is sent to a Llama-based model through Groq.
+
+```text
+System Prompt
+      +
+Last 3 Turns
+      +
+Top 5 Reranked Chunks
+      +
+Rewritten Query
+      |
+      v
+   Groq / Llama
+      |
+      v
+ Final Answer
+```
+
+### 8.9 Conversation Memory
+
+SQLite provides the initial lightweight conversation-memory layer.
+
+The system stores relevant conversation records and uses the last 3 conversation turns for the current generation request.
+
+This provides short-term continuity while limiting context size and latency.
+
+Future versions may add conversation summarization or semantic long-term memory.
+
+## 9. Functional Requirements
+
+### FR-01: User Query Input
+The system shall allow users to enter natural-language requirements.
+
+### FR-02: Input Validation
+The system shall reject empty queries, validate input length, handle malformed requests safely, and apply appropriate rate limits.
+
+### FR-03: Intent Classification
+The system shall classify queries using DistilBERT. Initial intents shall include Question, Code, Creative, Analysis, and Task.
+
+### FR-04: Dense Query Embedding
+The system shall use BGE-small to generate a query embedding.
+
+### FR-05: Dense Retrieval
+The system shall retrieve the top 10 dense candidates from Qdrant.
+
+### FR-06: Sparse Retrieval
+The system shall retrieve the top 10 sparse candidates using BM25.
+
+### FR-07: Parallel Retrieval
+Dense and sparse retrieval should run independently and concurrently where practical.
+
+### FR-08: RRF Fusion
+The system shall combine dense and sparse rankings using Reciprocal Rank Fusion and handle duplicate chunks correctly.
+
+### FR-09: Cross-Encoder Reranking
+The fused candidate set shall be scored by a cross-encoder reranker.
+
+### FR-10: Top-5 Context Selection
+The system shall select the top 5 reranked chunks for final generation context. This value shall be configurable.
+
+### FR-11: Prompt Assembly
+The system shall assemble the LLM context from the system prompt, last 3 conversation turns, top 5 retrieved chunks, and rewritten/normalized user query.
+
+### FR-12: LLM Generation
+The system shall send the assembled context to a Llama-based model through Groq.
+
+### FR-13: Final Answer
+The system shall return the generated answer to the user.
+
+### FR-14: Conversation Storage
+The system shall save conversation data to SQLite after successful interactions.
+
+### FR-15: Feedback Collection
+The system should support positive/negative feedback, ratings, written feedback, and regeneration requests.
+
+### FR-16: Data Pipeline
+The system shall support collection, cleaning, deduplication, chunking, metadata creation, BGE embedding generation, Qdrant indexing, BM25 index creation, and index validation.
+
+### FR-17: Experiment Tracking
+MLflow shall track model versions, parameters, datasets, metrics, artifacts, and evaluation results.
+
+### FR-18: Model Versioning
+The system shall maintain identifiable versions of models and important configurations.
+
+### FR-19: API Access
+The core functionality shall be exposed through FastAPI. Example endpoints include:
+- POST /generate
+- POST /classify-intent
+- POST /retrieve
+- POST /regenerate
+- POST /feedback
+- GET /health
+- GET /metrics
+
+### FR-20: Monitoring
+The system shall monitor API latency, retrieval latency, reranking latency, LLM latency, error rate, request count, retrieval/reranker scores, user feedback, and resource utilization.

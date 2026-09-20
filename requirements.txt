@@ -10,9 +10,15 @@ pymupdf>=1.25.0
 arxiv==2.1.3
 
 # Synthetic pair generation & LLMs
-google-generativeai>=0.7.0
-anthropic==0.34.2
-tiktoken==0.7.0
+groq>=0.11.0
+
+# Retrieval and API
+sentence-transformers>=3.0.1
+qdrant-client>=1.11.0
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+rank-bm25>=0.2.2
+pydantic>=2.8.0
 
 # Storage
 boto3==1.35.0
