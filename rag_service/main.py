@@ -33,7 +33,7 @@ KEYWORDS = {
 
 
 class GenerateRequest(BaseModel):
-    query: str = Field(min_length=3, max_length=4000)
+    query: str = Field(min_length=3)
     session_id: str | None = Field(default=None, max_length=128)
 
 
