@@ -36,7 +36,7 @@ promptbridge/
 +-- .env                             <- Secrets (API keys, Redis, R2 -- never commit)
 +-- .env.example                     <- Template for environment variables
 +-- .gitignore
-+-- dump.rdb                         <- Redis persistence snapshot
+
 |
 +-- data/
 |   +-- promptbridge.db              <- SQLite DB (conversation memory -- legacy path)
