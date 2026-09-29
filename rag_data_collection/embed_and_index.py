@@ -4,9 +4,13 @@ import argparse
 import json
 from pathlib import Path
 
+# pyrefly: ignore [missing-import]
 from sentence_transformers import SentenceTransformer
+# pyrefly: ignore [missing-import]
 from qdrant_client import QdrantClient
+# pyrefly: ignore [missing-import]
 from qdrant_client.models import Distance, PointStruct, VectorParams
+# pyrefly: ignore [missing-import]
 from tqdm import tqdm
 
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
@@ -61,6 +65,7 @@ def select_device(requested: str) -> str:
     if requested != "auto":
         return requested
     try:
+        # pyrefly: ignore [missing-import]
         import torch
         return "cuda" if torch.cuda.is_available() else "cpu"
     except ImportError:
