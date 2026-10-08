@@ -13,6 +13,7 @@ Install:
 
 import json
 import math
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -27,14 +28,36 @@ from cache import RAGCache
 
 load_dotenv(dotenv_path="../.env")
 
+# Derive data directory from env var (CI/Docker friendly) or fall back to the
+# canonical repo-relative location so the service runs on any machine.
+_DATA_DIR = Path(
+    os.getenv(
+        "PROMPTBRIDGE_DATA_DIR",
+        str(Path(__file__).resolve().parent.parent / "rag_data_collection" / "data"),
+    )
+)
+
 # ── Config ────────────────────────────────────────────────────────────────────
-QDRANT_PATH    = r"C:\Users\ps713\OneDrive\Documents\promptbridge\rag_data_collection\data\qdrant_db"
-CORPUS_PATH    = r"C:\Users\ps713\OneDrive\Documents\promptbridge\rag_data_collection\data\training_pairs\corpus.jsonl"
+QDRANT_PATH    = str(_DATA_DIR / "qdrant_db")
+CORPUS_PATH    = str(_DATA_DIR / "training_pairs" / "corpus.jsonl")
 COLLECTION     = "promptbridge"
 EMBED_MODEL    = "BAAI/bge-small-en-v1.5"
 DENSE_TOP_K    = 10       # chunks from dense search
 SPARSE_TOP_K   = 10       # chunks from BM25 search
 RRF_K          = 60       # RRF constant (standard value)
+
+# ── Qdrant singleton — only one file lock per process ────────────────────────
+# Local Qdrant uses portalocker for exclusive access; creating a second
+# QdrantClient on the same path (e.g. on uvicorn reload or a new session)
+# raises RuntimeError. Sharing one client across all DualRetriever instances
+# avoids this entirely.
+_qdrant_client: "QdrantClient | None" = None
+
+def _get_qdrant_client() -> "QdrantClient":
+    global _qdrant_client
+    if _qdrant_client is None:
+        _qdrant_client = QdrantClient(path=QDRANT_PATH)
+    return _qdrant_client
 
 class DualRetriever:
     def __init__(self, cache: RAGCache | None = None):
@@ -43,8 +66,8 @@ class DualRetriever:
         # L1 embedding cache — shared with the pipeline's RAGCache instance
         self._cache: RAGCache = cache or RAGCache()
 
-        # Dense search — Qdrant + BGE embedder
-        self.qdrant  = QdrantClient(path=QDRANT_PATH)
+        # Dense search — shared Qdrant client (singleton, one file lock per process)
+        self.qdrant   = _get_qdrant_client()
         self.embedder = SentenceTransformer(EMBED_MODEL, device="cuda"
                         if self._cuda_available() else "cpu")
 

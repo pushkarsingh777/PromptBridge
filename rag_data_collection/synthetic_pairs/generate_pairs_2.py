@@ -45,8 +45,8 @@ import json
 import os
 import random
 import re
-import signal
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -113,18 +113,18 @@ Rules:
 # GLOBAL STATE
 # ============================================================
 
-STOP_REQUESTED = False
+# Bug #9 fix: signal.SIGINT is unreliable in sub-threads on Windows.
+# Use threading.Event instead -- KeyboardInterrupt raised in the main
+# thread sets the event, which is checked between batches.
+_stop_event = threading.Event()
 
 
-def signal_handler(signum, frame):
-    global STOP_REQUESTED
-    STOP_REQUESTED = True
+def _request_stop():
+    """Signal the generation loop to stop after the current batch."""
+    _stop_event.set()
     print("\n" + "=" * 65)
     print("Interrupt requested. Finishing current operation and saving progress...")
     print("=" * 65)
-
-
-signal.signal(signal.SIGINT, signal_handler)
 
 
 # ============================================================
@@ -843,7 +843,7 @@ def generate_all_pairs(args):
     progress = tqdm(range(start_batch, total_batches), total=progress_total, desc="Generating pairs")
 
     for batch_index in progress:
-        if STOP_REQUESTED:
+        if _stop_event.is_set():
             print("\nStopping before next batch.")
             save_checkpoint(output_dir, batch_index, all_pairs)
             break
@@ -981,6 +981,7 @@ def main():
     try:
         generate_all_pairs(args)
     except KeyboardInterrupt:
+        _request_stop()
         print("\nGeneration interrupted.")
     except Exception as exc:
         print("\nFATAL ERROR:")

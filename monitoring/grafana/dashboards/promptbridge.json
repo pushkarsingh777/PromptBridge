@@ -1,0 +1,625 @@
+{
+  "__inputs": [],
+  "__requires": [
+    { "type": "grafana", "id": "grafana", "name": "Grafana", "version": "10.0.0" },
+    { "type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0" }
+  ],
+  "uid": "promptbridge-v2",
+  "title": "PromptBridge — Monitoring",
+  "description": "Real-time observability for the PromptBridge RAG pipeline",
+  "tags": ["promptbridge", "rag", "llm", "fastapi"],
+  "timezone": "browser",
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "version": 2,
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "editable": true,
+
+  "templating": {
+    "list": [
+      {
+        "name": "interval",
+        "type": "interval",
+        "label": "Interval",
+        "options": [
+          { "text": "30s", "value": "30s" },
+          { "text": "1m",  "value": "1m"  },
+          { "text": "5m",  "value": "5m"  },
+          { "text": "10m", "value": "10m" }
+        ],
+        "current": { "text": "1m", "value": "1m" },
+        "auto": false
+      }
+    ]
+  },
+
+  "panels": [
+
+    {
+      "id": 100,
+      "type": "row",
+      "title": "📊 Overview",
+      "collapsed": false,
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 }
+    },
+
+    {
+      "id": 1,
+      "title": "Request Rate",
+      "type": "stat",
+      "description": "Requests per second (last 1m)",
+      "gridPos": { "x": 0, "y": 1, "w": 4, "h": 4 },
+      "datasource": "Prometheus",
+      "targets": [{
+        "expr": "round(sum(rate(promptbridge_requests_total[$interval])), 0.01)",
+        "legendFormat": "req/s"
+      }],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "blue",   "value": null },
+              { "color": "green",  "value": 0.1  },
+              { "color": "yellow", "value": 10   },
+              { "color": "red",    "value": 50   }
+            ]
+          }
+        }
+      }
+    },
+
+    {
+      "id": 2,
+      "title": "Success Rate",
+      "type": "stat",
+      "description": "% of requests that completed without error",
+      "gridPos": { "x": 4, "y": 1, "w": 4, "h": 4 },
+      "datasource": "Prometheus",
+      "targets": [{
+        "expr": "sum(rate(promptbridge_requests_total{status='success'}[$interval])) / sum(rate(promptbridge_requests_total[$interval]))",
+        "legendFormat": "Success %"
+      }],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 1,
+          "min": 0, "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red",    "value": null },
+              { "color": "yellow", "value": 0.90 },
+              { "color": "green",  "value": 0.99 }
+            ]
+          }
+        }
+      }
+    },
+
+    {
+      "id": 3,
+      "title": "P95 Latency",
+      "type": "stat",
+      "description": "95th percentile end-to-end latency",
+      "gridPos": { "x": 8, "y": 1, "w": 4, "h": 4 },
+      "datasource": "Prometheus",
+      "targets": [{
+        "expr": "histogram_quantile(0.95, sum(rate(promptbridge_request_latency_seconds_bucket[$interval])) by (le))",
+        "legendFormat": "P95"
+      }],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green",  "value": null },
+              { "color": "yellow", "value": 2    },
+              { "color": "red",    "value": 5    }
+            ]
+          }
+        }
+      }
+    },
+
+    {
+      "id": 4,
+      "title": "L3 Cache Hit Rate",
+      "type": "stat",
+      "description": "Answer cache (skips entire pipeline on hit)",
+      "gridPos": { "x": 12, "y": 1, "w": 4, "h": 4 },
+      "datasource": "Prometheus",
+      "targets": [{
+        "expr": "sum(rate(promptbridge_cache_hits_total{layer='L3'}[$interval])) / (sum(rate(promptbridge_cache_hits_total{layer='L3'}[$interval])) + sum(rate(promptbridge_cache_misses_total{layer='L3'}[$interval])))",
+        "legendFormat": "Hit Rate"
+      }],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 1,
+          "min": 0, "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red",    "value": null },
+              { "color": "yellow", "value": 0.2  },
+              { "color": "green",  "value": 0.5  }
+            ]
+          }
+        }
+      }
+    },
+
+    {
+      "id": 5,
+      "title": "Active Sessions",
+      "type": "stat",
+      "description": "Live pipeline instances in memory",
+      "gridPos": { "x": 16, "y": 1, "w": 4, "h": 4 },
+      "datasource": "Prometheus",
+      "targets": [{
+        "expr": "promptbridge_active_sessions",
+        "legendFormat": "Sessions"
+      }],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green",  "value": null },
+              { "color": "yellow", "value": 50   },
+              { "color": "red",    "value": 200  }
+            ]
+          }
+        }
+      }
+    },
+
+    {
+      "id": 6,
+      "title": "Error Rate",
+      "type": "stat",
+      "description": "Failed requests per second",
+      "gridPos": { "x": 20, "y": 1, "w": 4, "h": 4 },
+      "datasource": "Prometheus",
+      "targets": [{
+        "expr": "sum(rate(promptbridge_requests_total{status='error'}[$interval]))",
+        "legendFormat": "Errors/s"
+      }],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null  },
+              { "color": "red",   "value": 0.001 }
+            ]
+          }
+        }
+      }
+    },
+
+    {
+      "id": 200,
+      "type": "row",
+      "title": "📈 Traffic & Latency",
+      "collapsed": false,
+      "gridPos": { "x": 0, "y": 5, "w": 24, "h": 1 }
+    },
+
+    {
+      "id": 7,
+      "title": "Request Rate — Success vs Error",
+      "type": "timeseries",
+      "description": "Requests per second over time, split by outcome",
+      "gridPos": { "x": 0, "y": 6, "w": 12, "h": 8 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(promptbridge_requests_total{status='success'}[$interval]))",
+          "legendFormat": "✅ Success"
+        },
+        {
+          "expr": "sum(rate(promptbridge_requests_total{status='error'}[$interval]))",
+          "legendFormat": "❌ Error"
+        }
+      ],
+      "options": { "tooltip": { "mode": "multi", "sort": "desc" }, "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "last"] } },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "lineWidth": 2, "fillOpacity": 10, "gradientMode": "opacity" } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "✅ Success" }, "properties": [{ "id": "color", "value": { "fixedColor": "#73BF69", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "❌ Error"   }, "properties": [{ "id": "color", "value": { "fixedColor": "#F2495C", "mode": "fixed" } }] }
+        ]
+      }
+    },
+
+    {
+      "id": 8,
+      "title": "Latency Percentiles (P50 · P95 · P99)",
+      "type": "timeseries",
+      "description": "End-to-end request latency distribution",
+      "gridPos": { "x": 12, "y": 6, "w": 12, "h": 8 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(promptbridge_request_latency_seconds_bucket[$interval])) by (le))",
+          "legendFormat": "P50 (median)"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(promptbridge_request_latency_seconds_bucket[$interval])) by (le))",
+          "legendFormat": "P95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(promptbridge_request_latency_seconds_bucket[$interval])) by (le))",
+          "legendFormat": "P99"
+        }
+      ],
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "last"] } },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "custom": { "lineWidth": 2, "fillOpacity": 5, "gradientMode": "opacity" } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "P50 (median)" }, "properties": [{ "id": "color", "value": { "fixedColor": "#73BF69", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "P95"          }, "properties": [{ "id": "color", "value": { "fixedColor": "#FF9830", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "P99"          }, "properties": [{ "id": "color", "value": { "fixedColor": "#F2495C", "mode": "fixed" } }] }
+        ]
+      }
+    },
+
+    {
+      "id": 300,
+      "type": "row",
+      "title": "💾 Cache Performance",
+      "collapsed": false,
+      "gridPos": { "x": 0, "y": 14, "w": 24, "h": 1 }
+    },
+
+    {
+      "id": 9,
+      "title": "Cache Hit Rate — All Layers",
+      "type": "timeseries",
+      "description": "L1 = embedding cache · L2 = chunk cache · L3 = answer cache",
+      "gridPos": { "x": 0, "y": 15, "w": 12, "h": 8 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(promptbridge_cache_hits_total{layer='L1'}[$interval])) / (sum(rate(promptbridge_cache_hits_total{layer='L1'}[$interval])) + sum(rate(promptbridge_cache_misses_total{layer='L1'}[$interval])))",
+          "legendFormat": "L1 — Embedding (24h TTL)"
+        },
+        {
+          "expr": "sum(rate(promptbridge_cache_hits_total{layer='L2'}[$interval])) / (sum(rate(promptbridge_cache_hits_total{layer='L2'}[$interval])) + sum(rate(promptbridge_cache_misses_total{layer='L2'}[$interval])))",
+          "legendFormat": "L2 — Chunks (6h TTL)"
+        },
+        {
+          "expr": "sum(rate(promptbridge_cache_hits_total{layer='L3'}[$interval])) / (sum(rate(promptbridge_cache_hits_total{layer='L3'}[$interval])) + sum(rate(promptbridge_cache_misses_total{layer='L3'}[$interval])))",
+          "legendFormat": "L3 — Answer (1h TTL)"
+        }
+      ],
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "last"] } },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0, "max": 1,
+          "custom": { "lineWidth": 2, "fillOpacity": 8 }
+        }
+      }
+    },
+
+    {
+      "id": 10,
+      "title": "Cache Hits vs Misses (last 1h)",
+      "type": "bargauge",
+      "description": "Absolute hit/miss counts per cache layer",
+      "gridPos": { "x": 12, "y": 15, "w": 6, "h": 8 },
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "sum(increase(promptbridge_cache_hits_total{layer='L1'}[1h]))",   "legendFormat": "L1 Hits"   },
+        { "expr": "sum(increase(promptbridge_cache_misses_total{layer='L1'}[1h]))", "legendFormat": "L1 Misses" },
+        { "expr": "sum(increase(promptbridge_cache_hits_total{layer='L2'}[1h]))",   "legendFormat": "L2 Hits"   },
+        { "expr": "sum(increase(promptbridge_cache_misses_total{layer='L2'}[1h]))", "legendFormat": "L2 Misses" },
+        { "expr": "sum(increase(promptbridge_cache_hits_total{layer='L3'}[1h]))",   "legendFormat": "L3 Hits"   },
+        { "expr": "sum(increase(promptbridge_cache_misses_total{layer='L3'}[1h]))", "legendFormat": "L3 Misses" }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "displayMode": "gradient",
+        "valueMode": "color"
+      },
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": [
+          { "matcher": { "id": "byRegexp", "options": ".*Hits.*"   }, "properties": [{ "id": "color", "value": { "fixedColor": "#73BF69", "mode": "fixed" } }] },
+          { "matcher": { "id": "byRegexp", "options": ".*Misses.*" }, "properties": [{ "id": "color", "value": { "fixedColor": "#F2495C", "mode": "fixed" } }] }
+        ]
+      }
+    },
+
+    {
+      "id": 11,
+      "title": "Requests Served from Cache vs Pipeline",
+      "type": "piechart",
+      "description": "How many requests hit L3 answer cache vs ran the full pipeline",
+      "gridPos": { "x": 18, "y": 15, "w": 6, "h": 8 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(increase(promptbridge_cache_hits_total{layer='L3'}[1h]))",
+          "legendFormat": "From Cache (L3 Hit)"
+        },
+        {
+          "expr": "sum(increase(promptbridge_cache_misses_total{layer='L3'}[1h]))",
+          "legendFormat": "Full Pipeline (L3 Miss)"
+        }
+      ],
+      "options": {
+        "pieType": "donut",
+        "displayLabels": ["name", "percent"],
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] },
+        "tooltip": { "mode": "single" }
+      },
+      "fieldConfig": {
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "From Cache (L3 Hit)"    }, "properties": [{ "id": "color", "value": { "fixedColor": "#73BF69", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "Full Pipeline (L3 Miss)" }, "properties": [{ "id": "color", "value": { "fixedColor": "#5794F2", "mode": "fixed" } }] }
+        ]
+      }
+    },
+
+    {
+      "id": 400,
+      "type": "row",
+      "title": "🧠 AI Intelligence",
+      "collapsed": false,
+      "gridPos": { "x": 0, "y": 23, "w": 24, "h": 1 }
+    },
+
+    {
+      "id": 12,
+      "title": "Intent Distribution (last 1h)",
+      "type": "piechart",
+      "description": "Breakdown of classified request intents",
+      "gridPos": { "x": 0, "y": 24, "w": 7, "h": 9 },
+      "datasource": "Prometheus",
+      "targets": [{
+        "expr": "sum by (intent) (increase(promptbridge_requests_total[1h]))",
+        "legendFormat": "{{intent}}"
+      }],
+      "options": {
+        "pieType": "donut",
+        "displayLabels": ["name", "percent"],
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] }
+      }
+    },
+
+    {
+      "id": 13,
+      "title": "Domain Distribution (last 1h)",
+      "type": "piechart",
+      "description": "Breakdown of detected application domains",
+      "gridPos": { "x": 7, "y": 24, "w": 7, "h": 9 },
+      "datasource": "Prometheus",
+      "targets": [{
+        "expr": "sum by (domain) (increase(promptbridge_requests_total[1h]))",
+        "legendFormat": "{{domain}}"
+      }],
+      "options": {
+        "pieType": "donut",
+        "displayLabels": ["name", "percent"],
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] }
+      }
+    },
+
+    {
+      "id": 14,
+      "title": "LLM Generation Latency P95 — by Intent",
+      "type": "timeseries",
+      "description": "How long Groq takes per intent category",
+      "gridPos": { "x": 14, "y": 24, "w": 10, "h": 9 },
+      "datasource": "Prometheus",
+      "targets": [{
+        "expr": "histogram_quantile(0.95, sum(rate(promptbridge_llm_latency_seconds_bucket[$interval])) by (le, intent))",
+        "legendFormat": "{{intent}}"
+      }],
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "last"] }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "lineWidth": 2, "fillOpacity": 5 }
+        }
+      }
+    },
+
+    {
+      "id": 500,
+      "type": "row",
+      "title": "🔍 Retrieval & Reranking",
+      "collapsed": false,
+      "gridPos": { "x": 0, "y": 33, "w": 24, "h": 1 }
+    },
+
+    {
+      "id": 15,
+      "title": "Requests by Intent Over Time",
+      "type": "timeseries",
+      "description": "Rate of requests per intent (stacked)",
+      "gridPos": { "x": 0, "y": 34, "w": 12, "h": 8 },
+      "datasource": "Prometheus",
+      "targets": [{
+        "expr": "sum by (intent) (rate(promptbridge_requests_total[$interval]))",
+        "legendFormat": "{{intent}}"
+      }],
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "last"] }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "lineWidth": 2, "fillOpacity": 20, "stacking": { "mode": "normal" } }
+        }
+      }
+    },
+
+    {
+      "id": 16,
+      "title": "Requests by Domain Over Time",
+      "type": "timeseries",
+      "description": "Rate of requests per domain (stacked)",
+      "gridPos": { "x": 12, "y": 34, "w": 12, "h": 8 },
+      "datasource": "Prometheus",
+      "targets": [{
+        "expr": "sum by (domain) (rate(promptbridge_requests_total[$interval]))",
+        "legendFormat": "{{domain}}"
+      }],
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "last"] }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "lineWidth": 2, "fillOpacity": 20, "stacking": { "mode": "normal" } }
+        }
+      }
+    },
+
+    {
+      "id": 600,
+      "type": "row",
+      "title": "⚙️ System",
+      "collapsed": false,
+      "gridPos": { "x": 0, "y": 42, "w": 24, "h": 1 }
+    },
+
+    {
+      "id": 17,
+      "title": "Active Sessions Over Time",
+      "type": "timeseries",
+      "description": "Number of pipeline instances held in memory",
+      "gridPos": { "x": 0, "y": 43, "w": 8, "h": 7 },
+      "datasource": "Prometheus",
+      "targets": [{
+        "expr": "promptbridge_active_sessions",
+        "legendFormat": "Sessions"
+      }],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "fixed", "fixedColor": "#5794F2" },
+          "custom": { "lineWidth": 2, "fillOpacity": 15 }
+        }
+      }
+    },
+
+    {
+      "id": 18,
+      "title": "Total Requests (last 1h)",
+      "type": "stat",
+      "gridPos": { "x": 8, "y": 43, "w": 4, "h": 3 },
+      "datasource": "Prometheus",
+      "targets": [{
+        "expr": "sum(increase(promptbridge_requests_total[1h]))",
+        "legendFormat": "Total"
+      }],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "text" } } }
+    },
+
+    {
+      "id": 19,
+      "title": "Total Errors (last 1h)",
+      "type": "stat",
+      "gridPos": { "x": 8, "y": 46, "w": 4, "h": 4 },
+      "datasource": "Prometheus",
+      "targets": [{
+        "expr": "sum(increase(promptbridge_requests_total{status='error'}[1h]))",
+        "legendFormat": "Errors"
+      }],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red",   "value": 1    }
+            ]
+          }
+        }
+      }
+    },
+
+    {
+      "id": 20,
+      "title": "Latency Heatmap",
+      "type": "heatmap",
+      "description": "Distribution of request durations over time",
+      "gridPos": { "x": 12, "y": 43, "w": 12, "h": 7 },
+      "datasource": "Prometheus",
+      "targets": [{
+        "expr": "sum(rate(promptbridge_request_latency_seconds_bucket[$interval])) by (le)",
+        "legendFormat": "{{le}}",
+        "format": "heatmap"
+      }],
+      "options": {
+        "calculate": false,
+        "yAxis": { "unit": "s", "decimals": 1 },
+        "color": {
+          "mode": "spectrum",
+          "scheme": "Oranges",
+          "steps": 64
+        },
+        "tooltip": { "show": true, "yHistogram": false },
+        "legend": { "show": true }
+      }
+    }
+
+  ]
+}

@@ -1,0 +1,21 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+
+  # ── PromptBridge FastAPI /metrics endpoint ────────────────────────────────
+  - job_name: "promptbridge"
+    static_configs:
+      - targets: ["promptbridge:8080"]   # service name from docker-compose
+    metrics_path: /metrics
+
+  # ── Prometheus self-monitoring ────────────────────────────────────────────
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # ── Redis exporter (optional — uncomment if you add redis_exporter service)
+  # - job_name: "redis"
+  #   static_configs:
+  #     - targets: ["redis_exporter:9121"]

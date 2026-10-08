@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+venv/
+.venv/
+push/
+myvenv/
+
+# Git
+.git/
+.gitignore
+
+# Environment/secrets
+.env
+
+# Qdrant/vector database
+**/qdrant_db/
+**/.lock
+
+# RAG generated data
+rag_data_collection/data/
+rag_data_collection/__pycache__/
+
+# Python databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+
+# Monitoring generated data
+monitoring/grafana_data/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

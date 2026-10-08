@@ -1,0 +1,89 @@
+version: "3.9"
+
+services:
+
+  # ── PromptBridge API ──────────────────────────────────────────────────────
+  promptbridge:
+    build:
+      context: ..
+      dockerfile: rag_service/Dockerfile
+    container_name: promptbridge_api
+    ports:
+      - "8080:8080"
+    # Bug #2 fix: wire env vars explicitly so Docker service-name DNS works.
+    # env_file was removed because .env is in .dockerignore and would fail.
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - REDIS_HOST=redis          # resolves to the redis service inside Docker
+      - REDIS_PORT=6379
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+      - PROMPTBRIDGE_DATA_DIR=/app/rag_data_collection/data
+    # Bug #3 fix: mount the pre-built data directory so the retriever can
+    # find qdrant_db/ and corpus.jsonl at startup (excluded from image by
+    # .dockerignore to keep image size small).
+    volumes:
+      - ../rag_data_collection/data:/app/rag_data_collection/data
+      - ../rag_service:/app   # 🔥 live-reload: code changes take effect without rebuilding
+    networks:
+      - monitoring
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  # ── Redis ─────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: promptbridge_redis
+    ports:
+      - "6379:6379"
+    # Bug #1 fix: persist Redis data across container restarts so L1/L2/L3
+    # cache survives deploys and doesn't fall back to in-memory every time.
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  # ── Prometheus ────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: promptbridge_prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    networks:
+      - monitoring
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=7d"
+
+  # ── Grafana ───────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: promptbridge_grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=promptbridge
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks:
+      - monitoring
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+networks:
+  monitoring:
+    driver: bridge
+
+volumes:
+  grafana_data:
+  redis_data:    # Bug #1 fix: named volume for Redis persistence

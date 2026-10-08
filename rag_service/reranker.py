@@ -46,6 +46,10 @@ class Reranker:
         if not chunks:
             return []
 
+        # Bug #8 fix: work on copies so we never mutate the caller's dicts
+        # (important when chunks came from the L2 cache and will be reused).
+        chunks = [dict(c) for c in chunks]
+
         # Build (query, chunk_text) pairs for cross-encoder
         pairs = [(query, chunk["text"]) for chunk in chunks]
 

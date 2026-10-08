@@ -12,22 +12,34 @@ Endpoints:
   GET  /health          — health check
   GET  /cache/stats     — cache hit/miss statistics
   POST /cache/flush     — flush all cached entries
+  GET  /metrics         — Prometheus metrics (scraped by Prometheus → Grafana)
 
 Run:
   uvicorn app:app --host 0.0.0.0 --port 8080 --reload
-  Docs: http://localhost:8080/docs
+  Docs: http://localhost:8080/docs   ← use localhost or 127.0.0.1 (not 0.0.0.0 — invalid on Windows)
 """
 
+import asyncio
+import logging
 import os
+import time
+import traceback
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 # pyrefly: ignore [missing-import]
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response, Request
 # pyrefly: ignore [missing-import]
 from fastapi.middleware.cors import CORSMiddleware
 # pyrefly: ignore [missing-import]
+from fastapi.responses import JSONResponse
+# pyrefly: ignore [missing-import]
 from pydantic import BaseModel
-from pipeline import PromptBridgePipeline
+# pyrefly: ignore [missing-import]
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+# pyrefly: ignore [missing-import]
+from pipeline import PromptBridgePipeline, GROQ_MODEL
+# pyrefly: ignore [missing-import]
+from metrics import REQUEST_COUNTER, REQUEST_LATENCY, ACTIVE_SESSIONS
 
 load_dotenv(dotenv_path="../.env")
 
@@ -40,12 +52,28 @@ def get_pipeline(session_id: str) -> PromptBridgePipeline:
         pipelines[session_id] = PromptBridgePipeline(session_id=session_id)
     return pipelines[session_id]
 
+class _SuppressMetricsScrapes(logging.Filter):
+    """Drop the noisy GET /metrics access-log lines from uvicorn output.
+
+    Prometheus scrapes /metrics every ~15 s; without this filter those lines
+    flood the log and bury real application errors.
+    """
+    def filter(self, record: logging.LogRecord) -> bool:  # True → keep, False → drop
+        msg = record.getMessage()
+        return "/metrics" not in msg
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Silence /metrics scrape noise in the uvicorn access log.
+    logging.getLogger("uvicorn.access").addFilter(_SuppressMetricsScrapes())
+
     # Pre-load default pipeline on startup
     get_pipeline("default")
+    ACTIVE_SESSIONS.set(len(pipelines))
     yield
     pipelines.clear()
+    ACTIVE_SESSIONS.set(0)
 
 app = FastAPI(
     title="PromptBridge RAG API",
@@ -54,12 +82,25 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Bug #6 fix: read allowed origins from env var so production can lock this down.
+_cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",")]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── Global catch-all: surfaces the real error as JSON ─────────────────────────
+@app.exception_handler(Exception)
+async def _global_exc_handler(request: Request, exc: Exception):
+    tb = traceback.format_exc()
+    print(f"\n[ERROR] {request.method} {request.url.path}\n{tb}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": str(exc), "type": type(exc).__name__, "traceback": tb},
+    )
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
 class PromptRequest(BaseModel):
@@ -108,9 +149,27 @@ async def generate_prompt(req: PromptRequest):
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty")
 
+    t_start  = time.time()
     pipeline = get_pipeline(req.session_id)
-    result   = pipeline.query(req.query, verbose=False)
-    return _build_response(result)
+    ACTIVE_SESSIONS.set(len(pipelines))
+
+    try:
+        result = pipeline.query(req.query, verbose=False)
+        intent = result.get("intent", "unknown")
+        domain = result.get("domain", "General")
+        cached = str(result.get("cached", False)).lower()
+
+        elapsed = time.time() - t_start
+        REQUEST_COUNTER.labels(endpoint="/generate-prompt", intent=intent, domain=domain, status="success").inc()
+        REQUEST_LATENCY.labels(endpoint="/generate-prompt", intent=intent, cached=cached).observe(elapsed)
+
+        return _build_response(result)
+
+    except Exception as exc:
+        tb = traceback.format_exc()
+        print(f"\n[ERROR] /generate-prompt failed:\n{tb}")
+        REQUEST_COUNTER.labels(endpoint="/generate-prompt", intent="unknown", domain="unknown", status="error").inc()
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.post("/chat", response_model=PromptResponse)
@@ -126,7 +185,11 @@ async def clear_session(req: ClearRequest):
 
 @app.get("/session/{session_id}")
 async def get_session(session_id: str):
-    pipeline = get_pipeline(session_id)
+    # Bug #5 fix: return 404 rather than silently creating (and loading) a new
+    # pipeline — GET is a read-only operation and must not have side effects.
+    if session_id not in pipelines:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+    pipeline = pipelines[session_id]
     return {
         "session_id": session_id,
         "turns":      pipeline.memory.turn_count,
@@ -138,7 +201,9 @@ async def health():
     return {
         "status":          "ok",
         "active_sessions": len(pipelines),
-        "model":           "openai/gpt-oss-20b",
+        # Bug #7 fix: read the model name from the pipeline module so a single
+        # change in pipeline.py is automatically reflected here.
+        "model":           GROQ_MODEL,
     }
 
 
@@ -155,3 +220,16 @@ async def cache_flush():
     pipeline = get_pipeline("default")
     pipeline.cache.flush_all()
     return {"status": "flushed"}
+
+
+@app.get("/metrics")
+async def metrics():
+    """Prometheus metrics endpoint — scraped every 15s by Prometheus.
+
+    generate_latest() is a blocking, CPU-bound call that serialises all metric
+    state.  Running it inside run_in_executor keeps it off the async event loop
+    so in-flight /generate-prompt requests are not delayed during each scrape.
+    """
+    loop = asyncio.get_event_loop()
+    data = await loop.run_in_executor(None, generate_latest)
+    return Response(data, media_type=CONTENT_TYPE_LATEST)

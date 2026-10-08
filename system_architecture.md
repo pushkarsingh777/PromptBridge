@@ -60,6 +60,18 @@ promptbridge/
 ├── .gitignore
 ├── dump.rdb                        ← Redis persistence snapshot
 │
+├── monitoring/                         ← Grafana + Prometheus monitoring stack
+│   ├── docker-compose.yml              ← Spins up API + Redis + Prometheus + Grafana
+│   ├── prometheus.yml                  ← Prometheus scrape config (15s interval)
+│   └── grafana/
+│       ├── dashboards/
+│       │   └── promptbridge.json       ← Pre-built Grafana dashboard (12 panels)
+│       └── provisioning/
+│           ├── datasources/
+│           │   └── prometheus.yml      ← Auto-provisions Prometheus datasource
+│           └── dashboards/
+│               └── dashboards.yml      ← Auto-provisions dashboard folder
+│
 ├── data/
 │   └── promptbridge.db             ← SQLite DB (conversation memory — legacy path)
 │
@@ -92,14 +104,16 @@ promptbridge/
 │       │   └── corpus.jsonl        ← Canonical corpus: flat JSONL of all chunks
 │       └── qdrant_db/              ← Qdrant local vector database (on-disk)
 │
-└── rag_service/                    ← Online inference service (FastAPI)
+├── rag_service/                    ← Online inference service (FastAPI)
     ├── app.py                      ← FastAPI server — entrypoint
     ├── pipeline.py                 ← Core PromptBridge pipeline orchestrator
     ├── retriever.py                ← Dual retrieval: Dense (Qdrant) + Sparse (BM25)
     ├── reranker.py                 ← Cross-encoder reranker
     ├── memory.py                   ← Conversation memory (RAM + SQLite)
     ├── cache.py                    ← Three-layer Redis cache with in-memory fallback
+    ├── metrics.py                  ← Prometheus metrics definitions (counters, histograms, gauges)
     ├── inspect_memory.py           ← Debug utility to inspect SQLite memory DB
+    ├── Dockerfile                  ← Container image for the API service
     └── data/
         ├── memory.db               ← SQLite database for conversation memory
         └── qdrant_db/              ← Qdrant DB (symlink or copy)
@@ -499,6 +513,7 @@ uvicorn app:app --host 0.0.0.0 --port 8080 --reload
 | `GET` | `/health` | Health check — status, active sessions, model |
 | `GET` | `/cache/stats` | Cache hit/miss statistics |
 | `POST` | `/cache/flush` | Flush all `pb:emb:*`, `pb:chunks:*`, `pb:ans:*` keys |
+| `GET` | `/metrics` | **Prometheus metrics** — scraped every 15s by Prometheus |
 
 ### Request / Response Schemas
 
@@ -535,6 +550,7 @@ uvicorn app:app --host 0.0.0.0 --port 8080 --reload
 | Raw Docs | Local JSON files | Scraped web pages + PDF content |
 | Corpus | JSONL file | Canonical flat chunk store for indexing |
 | Cloud Storage | Cloudflare R2 (optional) | Backup of raw_docs (S3-compatible API) |
+| Metrics | Prometheus + Grafana | Real-time monitoring and dashboards |
 
 ---
 
@@ -562,6 +578,7 @@ uvicorn app:app --host 0.0.0.0 --port 8080 --reload
 | Retrieval | `sentence-transformers >= 3.0.1`, `qdrant-client >= 1.11.0`, `rank-bm25 >= 0.2.2` |
 | API framework | `fastapi >= 0.115.0`, `uvicorn[standard] >= 0.30.0`, `pydantic >= 2.8.0` |
 | Caching | `redis[hiredis] >= 5.0.0` |
+| Monitoring | `prometheus-client >= 0.20.0` |
 | Cloud storage | `boto3 == 1.35.0` |
 | Utilities | `python-dotenv >= 1.0.0`, `tqdm == 4.66.5` |
 
@@ -643,6 +660,24 @@ curl -X POST http://localhost:8080/generate-prompt \
 - [x] Session-scoped pipeline instances (per-user isolation)
 - [x] CORS middleware (open for development)
 - [x] PowerShell pipeline orchestrator (`run_pipeline.ps1`)
+
+### ✅ 2026-09-29 — Monitoring & Observability
+
+- [x] `metrics.py` — Prometheus metrics module (7 metrics: counters, histograms, gauge)
+- [x] `GET /metrics` endpoint — Prometheus scrape target on FastAPI
+- [x] `monitoring/prometheus.yml` — Prometheus scrape config (15s interval)
+- [x] `monitoring/docker-compose.yml` — one-command stack (API + Redis + Prometheus + Grafana)
+- [x] `monitoring/grafana/dashboards/promptbridge.json` — pre-built dashboard (12 panels)
+  - Request rate & error rate (timeseries)
+  - P50 / P95 / P99 latency (timeseries)
+  - Cache hit rate per layer L1/L2/L3 (timeseries)
+  - Intent distribution (donut chart)
+  - Domain distribution (donut chart)
+  - LLM generation latency P95 by intent
+  - Cache hits vs misses bar gauge
+  - Active sessions & error rate stat panels
+- [x] Grafana auto-provisioning (datasource + dashboard folder)
+- [x] `rag_service/Dockerfile` — containerised API image
 
 ---
 

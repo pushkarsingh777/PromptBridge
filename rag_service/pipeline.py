@@ -38,6 +38,7 @@ from retriever import DualRetriever
 from reranker  import Reranker
 from memory    import Memory
 from cache     import RAGCache
+from metrics   import LLM_LATENCY
 
 load_dotenv(dotenv_path="../.env")
 
@@ -380,12 +381,14 @@ class PromptBridgePipeline:
         if verbose:
             print("  Generating optimized prompt...")
 
+        t_llm = time.time()
         response = self.groq.chat.completions.create(
             model=GROQ_MODEL,
             messages=messages,
             temperature=0.4,    # slight creativity for prompt variation
             max_tokens=1200,
         )
+        LLM_LATENCY.labels(intent=intent, domain=domain).observe(time.time() - t_llm)
         optimized_prompt = response.choices[0].message.content.strip()
 
         # Step 7: Save to memory (so follow-up requests have context)
@@ -462,7 +465,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="PromptBridge — Prompt Engineering Pipeline")
     parser.add_argument("--session", default="default", help="Session ID for memory")
     parser.add_argument("--query",   default="",        help="Single request (non-interactive)")
-    parser.add_argument("--verbose", action="store_true", default=True)
+    # Bug #4 fix: using BooleanOptionalAction so --verbose / --no-verbose both
+    # work. Default is False (silent) when called non-interactively; the chat()
+    # loop sets verbose=True explicitly.
+    parser.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=False)
     args = parser.parse_args()
 
     pipeline = PromptBridgePipeline(session_id=args.session)

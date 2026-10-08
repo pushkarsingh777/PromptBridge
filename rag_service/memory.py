@@ -55,7 +55,8 @@ class Memory:
                 SELECT role, content FROM conversations
                 WHERE session_id = ?
                 ORDER BY ts ASC
-            """, (self.session_id,)).fetchall()
+                LIMIT ?
+            """, (self.session_id, MAX_SESSIONS * 2)).fetchall()
 
         self.session_history = [
             {"role": row[0], "content": row[1]}

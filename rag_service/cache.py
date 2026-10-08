@@ -38,6 +38,12 @@ import threading
 import time
 
 try:
+    from metrics import CACHE_HITS, CACHE_MISSES  # type: ignore
+    _METRICS_OK = True
+except ImportError:
+    _METRICS_OK = False
+
+try:
     import redis                         # type: ignore
     from redis import ConnectionPool     # type: ignore
     _REDIS_OK = True
@@ -118,7 +124,7 @@ class RAGCache:
         self._stats = {"hits": 0, "misses": 0, "errors": 0}
 
     # ── Internal get/set ──────────────────────────────────────────────────────
-    def _get(self, key: str, ttl: int | None = None):
+    def _get(self, key: str, ttl: int | None = None, layer: str = "L?"):
         """
         Fetch a cached value.  Returns None on miss.
         If `ttl` is provided and Redis is live, refreshes the key's TTL
@@ -130,9 +136,13 @@ class RAGCache:
                 if raw is None:
                     with self._lock:
                         self._stats["misses"] += 1
+                    if _METRICS_OK:
+                        CACHE_MISSES.labels(layer=layer).inc()
                     return None
                 with self._lock:
                     self._stats["hits"] += 1
+                if _METRICS_OK:
+                    CACHE_HITS.labels(layer=layer).inc()
                 # Refresh TTL on hit so hot keys never expire mid-session
                 if ttl:
                     self._redis.expire(key, ttl)
@@ -143,9 +153,13 @@ class RAGCache:
             if entry is None or (entry["exp"] and time.time() > entry["exp"]):
                 with self._lock:
                     self._stats["misses"] += 1
+                if _METRICS_OK:
+                    CACHE_MISSES.labels(layer=layer).inc()
                 return None
             with self._lock:
                 self._stats["hits"] += 1
+            if _METRICS_OK:
+                CACHE_HITS.labels(layer=layer).inc()
             # Refresh expiry on hit
             if ttl and entry["exp"]:
                 entry["exp"] = time.time() + ttl
@@ -175,7 +189,7 @@ class RAGCache:
     # ── L1 — Embedding cache ──────────────────────────────────────────────────
     def get_embedding(self, query: str) -> "list[float] | None":
         """Return cached query embedding vector, or None on miss."""
-        return self._get(PREFIX_EMBED + _sha(query), ttl=TTL_EMBEDDING)
+        return self._get(PREFIX_EMBED + _sha(query), ttl=TTL_EMBEDDING, layer="L1")
 
     def set_embedding(self, query: str, vector: "list[float]") -> None:
         self._set(PREFIX_EMBED + _sha(query), vector, TTL_EMBEDDING)
@@ -183,7 +197,7 @@ class RAGCache:
     # ── L2 — Retrieval cache ──────────────────────────────────────────────────
     def get_chunks(self, query: str) -> "list[dict] | None":
         """Return cached retrieval chunks, or None on miss."""
-        return self._get(PREFIX_CHUNKS + _sha(query), ttl=TTL_RETRIEVAL)
+        return self._get(PREFIX_CHUNKS + _sha(query), ttl=TTL_RETRIEVAL, layer="L2")
 
     def set_chunks(self, query: str, chunks: "list[dict]") -> None:
         self._set(PREFIX_CHUNKS + _sha(query), chunks, TTL_RETRIEVAL)
@@ -191,12 +205,11 @@ class RAGCache:
     # ── L3 — Answer cache ─────────────────────────────────────────────────────
     def get_answer(self, query: str) -> "dict | None":
         """Return full cached answer dict, or None on miss."""
-        return self._get(PREFIX_ANSWER + _sha(query), ttl=TTL_ANSWER)
+        return self._get(PREFIX_ANSWER + _sha(query), ttl=TTL_ANSWER, layer="L3")
 
     def set_answer(self, query: str, result: dict) -> None:
-        """Cache answer; strips large chunk blobs to keep the entry lean."""
-        slim = {k: v for k, v in result.items() if k != "chunks"}
-        self._set(PREFIX_ANSWER + _sha(query), slim, TTL_ANSWER)
+        """Cache the full answer dict (including chunks)."""
+        self._set(PREFIX_ANSWER + _sha(query), result, TTL_ANSWER)
 
     # ── Utilities ─────────────────────────────────────────────────────────────
     def invalidate(self, query: str) -> None:
@@ -237,11 +250,9 @@ class RAGCache:
                 s["redis_peak_memory_human"] = info.get("used_memory_peak_human", "?")
                 # Count keys per layer
                 s["keys"] = {
-                    "embeddings": self._redis.dbsize()
-                        if not any([PREFIX_EMBED, PREFIX_CHUNKS, PREFIX_ANSWER])
-                        else len(self._redis.keys(f"{PREFIX_EMBED}*")),
-                    "chunks":  len(self._redis.keys(f"{PREFIX_CHUNKS}*")),
-                    "answers": len(self._redis.keys(f"{PREFIX_ANSWER}*")),
+                    "embeddings": len(self._redis.keys(f"{PREFIX_EMBED}*")),
+                    "chunks":     len(self._redis.keys(f"{PREFIX_CHUNKS}*")),
+                    "answers":    len(self._redis.keys(f"{PREFIX_ANSWER}*")),
                 }
             except Exception:
                 pass
