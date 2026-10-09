@@ -27,9 +27,6 @@ from qdrant_client.models import SearchParams
 # pyrefly: ignore [missing-import]
 from rank_bm25 import BM25Okapi
 
-# pyrefly: ignore [missing-import]
-from sentence_transformers import SentenceTransformer
-
 load_dotenv(dotenv_path="../.env")
 
 # Derive data directory from env var (CI/Docker friendly) or fall back to the
@@ -79,6 +76,18 @@ def _get_qdrant_client() -> "QdrantClient":
 class DualRetriever:
     def __init__(self, cache: RAGCache | None = None):
         print("Initializing retriever...")
+
+        # Lazy import: sentence-transformers pulls PyTorch (~2 GB) at import
+        # time.  Deferring it here means the module is importable in CI smoke
+        # tests (which mock the pipeline and never construct DualRetriever).
+        try:
+            # pyrefly: ignore [missing-import]
+            from sentence_transformers import SentenceTransformer
+        except ImportError as exc:
+            raise ImportError(
+                "sentence-transformers is required to use DualRetriever. "
+                "Install it with: pip install sentence-transformers"
+            ) from exc
 
         # L1 embedding cache — shared with the pipeline's RAGCache instance
         self._cache: RAGCache = cache or RAGCache()
