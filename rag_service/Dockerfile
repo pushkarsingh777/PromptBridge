@@ -10,7 +10,7 @@ RUN pip install --no-cache-dir \
     --timeout 300 \
     --retries 3 \
     --index-url https://download.pytorch.org/whl/cpu \
-    torch==2.2.2+cpu
+    "numpy==1.26.4" "torch==2.5.1"
 
 # All other dependencies (including prometheus-fastapi-instrumentator inline)
 COPY requirements-api.txt .

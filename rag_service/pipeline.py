@@ -30,15 +30,16 @@ Run:
 
 import os
 import time
+
+from cache import RAGCache
 from dotenv import load_dotenv
+
 # pyrefly: ignore [missing-import]
 from groq import Groq
-
+from memory import Memory
+from metrics import LLM_LATENCY
+from reranker import Reranker
 from retriever import DualRetriever
-from reranker  import Reranker
-from memory    import Memory
-from cache     import RAGCache
-from metrics   import LLM_LATENCY
 
 load_dotenv(dotenv_path="../.env")
 

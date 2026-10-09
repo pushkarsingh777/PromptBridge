@@ -12,21 +12,23 @@ Install:
 """
 
 import json
-import math
 import os
 from pathlib import Path
-from typing import Optional
 
+from cache import RAGCache
 from dotenv import load_dotenv
+
 # pyrefly: ignore [missing-import]
 from qdrant_client import QdrantClient
+
 # pyrefly: ignore [missing-import]
 from qdrant_client.models import SearchParams
+
 # pyrefly: ignore [missing-import]
 from rank_bm25 import BM25Okapi
+
 # pyrefly: ignore [missing-import]
 from sentence_transformers import SentenceTransformer
-from cache import RAGCache
 
 load_dotenv(dotenv_path="../.env")
 

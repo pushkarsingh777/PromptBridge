@@ -44,8 +44,8 @@ except ImportError:
     _METRICS_OK = False
 
 try:
-    import redis                         # type: ignore
-    from redis import ConnectionPool     # type: ignore
+    import redis  # type: ignore
+    from redis import ConnectionPool  # type: ignore
     _REDIS_OK = True
 except ImportError:
     _REDIS_OK = False
@@ -95,7 +95,7 @@ def _get_pool() -> "ConnectionPool | None":
             r.ping()
             _pool = p
             print(f"  [Cache] Redis pool ready → {REDIS_HOST}:{REDIS_PORT} db={REDIS_DB}")
-        except Exception as exc:
+        except (OSError, redis.RedisError) as exc:
             print(f"  [Cache] Redis unavailable ({exc}) — using in-memory fallback.")
             _pool = None
     return _pool
@@ -116,7 +116,7 @@ class RAGCache:
 
     def __init__(self):
         self._pool = _get_pool()
-        self._redis: "redis.Redis | None" = (
+        self._redis: redis.Redis | None = (
             redis.Redis(connection_pool=self._pool) if self._pool else None
         )
         self._fallback: dict = {}
@@ -165,7 +165,7 @@ class RAGCache:
                 entry["exp"] = time.time() + ttl
             return entry["val"]
 
-        except Exception as exc:
+        except (json.JSONDecodeError, redis.RedisError, OSError, KeyError) as exc:
             with self._lock:
                 self._stats["errors"] += 1
             print(f"  [Cache] GET error: {exc}")
@@ -181,7 +181,7 @@ class RAGCache:
                 "val": value,
                 "exp": time.time() + ttl if ttl else None,
             }
-        except Exception as exc:
+        except (json.JSONDecodeError, redis.RedisError, OSError) as exc:
             with self._lock:
                 self._stats["errors"] += 1
             print(f"  [Cache] SET error: {exc}")
@@ -221,8 +221,8 @@ class RAGCache:
                     self._redis.delete(key)
                 else:
                     self._fallback.pop(key, None)
-            except Exception:
-                pass
+            except (redis.RedisError, OSError, KeyError) as exc:
+                print(f"  [Cache] DELETE error: {exc}")
 
     def flush_all(self) -> None:
         """Flush every PromptBridge key from Redis (pattern delete)."""
@@ -254,6 +254,6 @@ class RAGCache:
                     "chunks":     len(self._redis.keys(f"{PREFIX_CHUNKS}*")),
                     "answers":    len(self._redis.keys(f"{PREFIX_ANSWER}*")),
                 }
-            except Exception:
-                pass
+            except (redis.RedisError, OSError) as exc:
+                print(f"  [Cache] STATS error: {exc}")
         return s

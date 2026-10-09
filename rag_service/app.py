@@ -25,21 +25,29 @@ import os
 import time
 import traceback
 from contextlib import asynccontextmanager
+
 from dotenv import load_dotenv
+
 # pyrefly: ignore [missing-import]
-from fastapi import FastAPI, HTTPException, Response, Request
+from fastapi import FastAPI, HTTPException, Request, Response
+
 # pyrefly: ignore [missing-import]
 from fastapi.middleware.cors import CORSMiddleware
+
 # pyrefly: ignore [missing-import]
 from fastapi.responses import JSONResponse
+
+# pyrefly: ignore [missing-import]
+from metrics import ACTIVE_SESSIONS, REQUEST_COUNTER, REQUEST_LATENCY
+
+# pyrefly: ignore [missing-import]
+from pipeline import GROQ_MODEL, PromptBridgePipeline
+
+# pyrefly: ignore [missing-import]
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
 # pyrefly: ignore [missing-import]
 from pydantic import BaseModel
-# pyrefly: ignore [missing-import]
-from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
-# pyrefly: ignore [missing-import]
-from pipeline import PromptBridgePipeline, GROQ_MODEL
-# pyrefly: ignore [missing-import]
-from metrics import REQUEST_COUNTER, REQUEST_LATENCY, ACTIVE_SESSIONS
 
 load_dotenv(dotenv_path="../.env")
 
@@ -165,7 +173,7 @@ async def generate_prompt(req: PromptRequest):
 
         return _build_response(result)
 
-    except Exception as exc:
+    except (ValueError, RuntimeError, OSError, KeyError) as exc:
         tb = traceback.format_exc()
         print(f"\n[ERROR] /generate-prompt failed:\n{tb}")
         REQUEST_COUNTER.labels(endpoint="/generate-prompt", intent="unknown", domain="unknown", status="error").inc()
