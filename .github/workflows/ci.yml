@@ -1,4 +1,4 @@
-﻿name: CI / CD
+name: CI / CD
 
 on:
   push:
@@ -45,7 +45,9 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          pip install fastapi httpx pytest pytest-asyncio python-dotenv pydantic groq
+          pip install \
+            fastapi httpx pytest pytest-asyncio python-dotenv pydantic groq \
+            prometheus-client redis[hiredis] rank-bm25 qdrant-client
 
       - name: Run tests
         env:
