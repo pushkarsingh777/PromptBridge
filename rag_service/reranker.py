@@ -10,15 +10,25 @@ Uses: cross-encoder/ms-marco-MiniLM-L-6-v2
 - Reads (query, chunk) pair together and gives a relevance score
 """
 
-# pyrefly: ignore [missing-import]
-from sentence_transformers import CrossEncoder
-
 # ── Config ────────────────────────────────────────────────────────────────────
 RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 TOP_N          = 5     # chunks to return after reranking
 
 class Reranker:
     def __init__(self):
+        # Lazy import: sentence-transformers pulls in PyTorch (~2 GB) so we
+        # only import it at instantiation time.  This keeps module-level import
+        # side-effects minimal and lets CI smoke tests (which mock the pipeline
+        # and never construct a Reranker) run without installing the package.
+        try:
+            # pyrefly: ignore [missing-import]
+            from sentence_transformers import CrossEncoder
+        except ImportError as exc:
+            raise ImportError(
+                "sentence-transformers is required to use Reranker. "
+                "Install it with: pip install sentence-transformers"
+            ) from exc
+
         print(f"Loading reranker: {RERANKER_MODEL}")
         self.model = CrossEncoder(
             RERANKER_MODEL,
