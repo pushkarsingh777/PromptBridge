@@ -29,8 +29,6 @@ redis[hiredis]>=5.0.0
 # Monitoring
 prometheus-client>=0.20.0
 
-# Kafka (async request queue)
-kafka-python>=2.0.2
 
 # Environment & Utilities
 python-dotenv>=1.0.0

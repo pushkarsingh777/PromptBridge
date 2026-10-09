@@ -81,13 +81,13 @@ def build_index(args: argparse.Namespace) -> None:
     device = select_device(args.device)
     print(f"Loading {args.model} on {device}")
     model = SentenceTransformer(args.model, device=device)
-    vector_size = model.get_sentence_embedding_dimension()
+    vector_size = model.get_embedding_dimension()
 
     # Connect to Qdrant: server URL takes priority over local path.
     qdrant_url = getattr(args, "qdrant_url", "") or ""
     if qdrant_url:
-        client = QdrantClient(url=qdrant_url)
-        print(f"Qdrant mode : HTTP server ({qdrant_url})")
+        client = QdrantClient(url=qdrant_url, timeout=args.timeout)
+        print(f"Qdrant mode : HTTP server ({qdrant_url}) [timeout={args.timeout}s]")
     else:
         client = QdrantClient(path=str(db_path))
         print(f"Qdrant mode : local path ({db_path})")
@@ -151,6 +151,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hnsw-m",            type=int, default=16,  help="HNSW m: bi-directional links per node (default 16)")
     parser.add_argument("--hnsw-ef-construct", type=int, default=200, help="HNSW ef_construct: candidate list at build time (default 200)")
     parser.add_argument("--qdrant-url",         default="",            help="Qdrant server URL (e.g. http://localhost:6333). Overrides --qdrant-path.")
+    parser.add_argument("--timeout",            type=int, default=300, help="HTTP timeout in seconds for Qdrant requests (default 300). Increase on slow CPU.")
     args = parser.parse_args()
     if args.batch_size < 1:
         parser.error("--batch-size must be positive")

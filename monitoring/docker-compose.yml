@@ -1,78 +1,8 @@
 services:
 
-  # ── Zookeeper ──────────────────────────────────────────────────────────────
-  zookeeper:
-    image: confluentinc/cp-zookeeper:7.6.1
-    container_name: promptbridge_zookeeper
-
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
-
-    volumes:
-      - zookeeper_data:/var/lib/zookeeper/data
-      - zookeeper_log:/var/lib/zookeeper/log
-
-    networks:
-      - monitoring
-
-    restart: unless-stopped
-
-
-  # ── Kafka broker ──────────────────────────────────────────────────────────
-  kafka:
-    image: confluentinc/cp-kafka:7.6.1
-    container_name: promptbridge_kafka
-
-    depends_on:
-      - zookeeper
-
-    ports:
-      - "9092:9092"
-      - "9093:9093"
-
-    environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-
-      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:9093
-
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:9093
-
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
-
-      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
-
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-
-      KAFKA_LOG_RETENTION_MS: 3600000
-      KAFKA_LOG_RETENTION_BYTES: 104857600
-
-    volumes:
-      - kafka_data:/var/lib/kafka/data
-
-    networks:
-      - monitoring
-
-    restart: unless-stopped
-
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "kafka-broker-api-versions --bootstrap-server localhost:9092 >/dev/null 2>&1"
-        ]
-      interval: 15s
-      timeout: 10s
-      retries: 10
-      start_period: 60s
-
-
   # ── Qdrant vector database ────────────────────────────────────────────────
   qdrant:
-    image: qdrant/qdrant:v1.8.4
+    image: qdrant/qdrant:v1.13.6  # TODO: upgrade to v1.19.0 once current index is stable
     container_name: promptbridge_qdrant
 
     ports:
@@ -115,16 +45,12 @@ services:
 
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
 
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
 
       PROMPTBRIDGE_DATA_DIR: /app/rag_data_collection/data
 
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      KAFKA_ENABLED: ${KAFKA_ENABLED:-true}
-
-      JOB_TTL_SECONDS: 600
-
       QDRANT_URL: http://qdrant:6333
 
     volumes:
@@ -138,59 +64,6 @@ services:
       - monitoring
 
     depends_on:
-      redis:
-        condition: service_started
-
-      kafka:
-        condition: service_healthy
-
-      qdrant:
-        condition: service_healthy
-
-    restart: unless-stopped
-
-
-  # ── Kafka worker ──────────────────────────────────────────────────────────
-  worker:
-    build:
-      context: ..
-      dockerfile: rag_service/Dockerfile
-
-    container_name: promptbridge_worker
-
-    command:
-      - python
-      - kafka_worker.py
-
-    environment:
-      GROQ_API_KEY: ${GROQ_API_KEY}
-
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      KAFKA_ENABLED: "false"
-
-      PROMPTBRIDGE_DATA_DIR: /app/rag_data_collection/data
-
-      JOB_TTL_SECONDS: 600
-
-      QDRANT_URL: http://qdrant:6333
-
-    volumes:
-      # PromptBridge application
-      - ../rag_service:/app
-
-      # Entire RAG data collection project
-      - ../rag_data_collection:/app/rag_data_collection
-
-    networks:
-      - monitoring
-
-    depends_on:
-      kafka:
-        condition: service_healthy
-
       redis:
         condition: service_started
 
@@ -280,6 +153,3 @@ networks:
 volumes:
   grafana_data:
   redis_data:
-  kafka_data:
-  zookeeper_data:
-  zookeeper_log:

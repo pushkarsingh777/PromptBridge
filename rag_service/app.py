@@ -40,25 +40,8 @@ from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from pipeline import PromptBridgePipeline, GROQ_MODEL
 # pyrefly: ignore [missing-import]
 from metrics import REQUEST_COUNTER, REQUEST_LATENCY, ACTIVE_SESSIONS
-from kafka_producer import publish_request, close_producer
 
 load_dotenv(dotenv_path="../.env")
-
-# Set KAFKA_ENABLED=false to force synchronous execution (dev / no-Kafka mode).
-KAFKA_ENABLED = os.getenv("KAFKA_ENABLED", "true").lower() not in ("false", "0", "no")
-
-# Redis client reused from cache layer for job-result storage.
-# pyrefly: ignore [missing-import]
-import redis as _redis_lib
-
-def _get_redis() -> "_redis_lib.Redis":
-    host = os.getenv("REDIS_HOST", "localhost")
-    port = int(os.getenv("REDIS_PORT", "6379"))
-    return _redis_lib.Redis(host=host, port=port, decode_responses=True,
-                            socket_connect_timeout=2)
-
-JOB_KEY_PREFIX   = "pb:job:"
-JOB_TTL_SECONDS  = int(os.getenv("JOB_TTL_SECONDS", "600"))
 
 # ── Global pipeline instance (loaded once at startup) ─────────────────────────
 pipelines: dict[str, PromptBridgePipeline] = {}
@@ -91,7 +74,6 @@ async def lifespan(app: FastAPI):
     yield
     pipelines.clear()
     ACTIVE_SESSIONS.set(0)
-    close_producer()  # flush + close Kafka producer on shutdown
 
 app = FastAPI(
     title="PromptBridge RAG API",
@@ -124,12 +106,6 @@ async def _global_exc_handler(request: Request, exc: Exception):
 class PromptRequest(BaseModel):
     query:      str           # user's vague / incomplete request
     session_id: str = "default"
-    async_mode: bool = True   # True → enqueue via Kafka (if available); False → run sync
-
-class JobAccepted(BaseModel):
-    job_id:  str
-    status:  str = "pending"
-    poll_url: str            # GET this URL to retrieve the result
 
 class PromptResponse(BaseModel):
     query:            str     # original user request
@@ -167,47 +143,12 @@ def _build_response(result: dict) -> PromptResponse:
     )
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
-@app.post("/generate-prompt", response_model=PromptResponse | JobAccepted,
-          status_code=200)
-async def generate_prompt(req: PromptRequest, response: Response):
-    """Main endpoint — transforms a vague user request into an optimized prompt.
-
-    When Kafka is available and async_mode=True (default):
-      • Returns HTTP 202 with {job_id, poll_url} immediately.
-      • The worker process runs the pipeline and stores the result in Redis.
-      • Poll GET /job/{job_id} to retrieve the result.
-
-    When Kafka is unavailable OR async_mode=False:
-      • Falls back to synchronous execution (original behaviour).
-    """
+@app.post("/generate-prompt", response_model=PromptResponse, status_code=200)
+async def generate_prompt(req: PromptRequest):
+    """Main endpoint — transforms a vague user request into an optimized prompt."""
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty")
 
-    # ── Async path (Kafka) ────────────────────────────────────────────────
-    if KAFKA_ENABLED and req.async_mode:
-        try:
-            job_id = publish_request(query=req.query, session_id=req.session_id)
-            # Write a 'pending' placeholder so /job/{id} returns 202 immediately.
-            try:
-                _get_redis().setex(
-                    f"{JOB_KEY_PREFIX}{job_id}",
-                    JOB_TTL_SECONDS,
-                    '{"status":"pending"}',
-                )
-            except Exception:
-                pass  # Redis unavailable — worker will write result directly
-
-            response.status_code = 202
-            return JobAccepted(
-                job_id=job_id,
-                status="pending",
-                poll_url=f"/job/{job_id}",
-            )
-        except RuntimeError:
-            # Kafka is down — fall through to sync execution
-            pass
-
-    # ── Sync path (fallback or async_mode=False) ──────────────────────────
     t_start  = time.time()
     pipeline = get_pipeline(req.session_id)
     ACTIVE_SESSIONS.set(len(pipelines))
@@ -231,84 +172,11 @@ async def generate_prompt(req: PromptRequest, response: Response):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.post("/chat", response_model=PromptResponse | JobAccepted)
-async def chat(req: PromptRequest, response: Response):
+@app.post("/chat", response_model=PromptResponse)
+async def chat(req: PromptRequest):
     """Alias for /generate-prompt (backward compatibility)."""
-    return await generate_prompt(req, response)
+    return await generate_prompt(req)
 
-
-@app.get("/job/{job_id}")
-async def get_job(job_id: str):
-    """Poll the status / result of an async Kafka-queued job.
-
-    Status values:
-      pending  — job received by API, not yet picked up by worker
-      running  — worker is executing the pipeline
-      done     — result is ready (full PromptResponse fields included)
-      error    — pipeline failed (see 'detail' field)
-      404      — job_id unknown or TTL expired (10 min)
-    """
-    try:
-        redis  = _get_redis()
-        raw    = redis.get(f"{JOB_KEY_PREFIX}{job_id}")
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Redis unavailable: {exc}")
-
-    if raw is None:
-        raise HTTPException(status_code=404,
-                            detail=f"Job '{job_id}' not found or expired.")
-
-    import json as _json
-    data = _json.loads(raw)
-
-    # Return 202 while still in progress, 200 when done, 500 on error.
-    status = data.get("status")
-    if status == "done":
-        return JSONResponse(content=data, status_code=200)
-    elif status == "error":
-        return JSONResponse(content=data, status_code=500)
-    else:
-        return JSONResponse(content=data, status_code=202)
-
-
-@app.get("/job/{job_id}/wait")
-async def wait_for_job(job_id: str, timeout: int = 60, poll_interval: float = 0.5):
-    """Convenience blocking endpoint — polls Redis until the job finishes or timeout.
-
-    Query params:
-      timeout       — max seconds to wait (default 60, max 120)
-      poll_interval — seconds between Redis checks (default 0.5)
-
-    Returns the same payload as GET /job/{job_id} once status=done|error.
-    """
-    import asyncio as _asyncio
-    import json   as _json
-
-    timeout = min(timeout, 120)           # hard cap
-    deadline = time.time() + timeout
-
-    while time.time() < deadline:
-        try:
-            redis = _get_redis()
-            raw   = redis.get(f"{JOB_KEY_PREFIX}{job_id}")
-        except Exception as exc:
-            raise HTTPException(status_code=503, detail=f"Redis unavailable: {exc}")
-
-        if raw is None:
-            raise HTTPException(status_code=404,
-                                detail=f"Job '{job_id}' not found or expired.")
-
-        data   = _json.loads(raw)
-        status = data.get("status")
-
-        if status in ("done", "error"):
-            code = 200 if status == "done" else 500
-            return JSONResponse(content=data, status_code=code)
-
-        await _asyncio.sleep(poll_interval)
-
-    raise HTTPException(status_code=408,
-                        detail=f"Job '{job_id}' did not complete within {timeout}s.")
 
 @app.post("/session/clear")
 async def clear_session(req: ClearRequest):
