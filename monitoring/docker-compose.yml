@@ -1,89 +1,285 @@
-version: "3.9"
-
 services:
 
-  # ── PromptBridge API ──────────────────────────────────────────────────────
+  # ── Zookeeper ──────────────────────────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    container_name: promptbridge_zookeeper
+
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_log:/var/lib/zookeeper/log
+
+    networks:
+      - monitoring
+
+    restart: unless-stopped
+
+
+  # ── Kafka broker ──────────────────────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: promptbridge_kafka
+
+    depends_on:
+      - zookeeper
+
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:9093
+
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:9093
+
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+      KAFKA_LOG_RETENTION_MS: 3600000
+      KAFKA_LOG_RETENTION_BYTES: 104857600
+
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+
+    networks:
+      - monitoring
+
+    restart: unless-stopped
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "kafka-broker-api-versions --bootstrap-server localhost:9092 >/dev/null 2>&1"
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+
+  # ── Qdrant vector database ────────────────────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:v1.8.4
+    container_name: promptbridge_qdrant
+
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+
+    volumes:
+      - ../rag_data_collection/data/qdrant_db:/qdrant/storage
+
+    networks:
+      - monitoring
+
+    restart: unless-stopped
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "bash -c 'echo > /dev/tcp/localhost/6333' 2>/dev/null"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+
+  # ── PromptBridge FastAPI application ──────────────────────────────────────
   promptbridge:
     build:
       context: ..
       dockerfile: rag_service/Dockerfile
+
     container_name: promptbridge_api
+
     ports:
       - "8080:8080"
-    # Bug #2 fix: wire env vars explicitly so Docker service-name DNS works.
-    # env_file was removed because .env is in .dockerignore and would fail.
+
     environment:
-      - GROQ_API_KEY=${GROQ_API_KEY}
-      - REDIS_HOST=redis          # resolves to the redis service inside Docker
-      - REDIS_PORT=6379
-      - CORS_ORIGINS=${CORS_ORIGINS:-*}
-      - PROMPTBRIDGE_DATA_DIR=/app/rag_data_collection/data
-    # Bug #3 fix: mount the pre-built data directory so the retriever can
-    # find qdrant_db/ and corpus.jsonl at startup (excluded from image by
-    # .dockerignore to keep image size small).
+      GROQ_API_KEY: ${GROQ_API_KEY}
+
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+
+      PROMPTBRIDGE_DATA_DIR: /app/rag_data_collection/data
+
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_ENABLED: ${KAFKA_ENABLED:-true}
+
+      JOB_TTL_SECONDS: 600
+
+      QDRANT_URL: http://qdrant:6333
+
     volumes:
-      - ../rag_data_collection/data:/app/rag_data_collection/data
-      - ../rag_service:/app   # 🔥 live-reload: code changes take effect without rebuilding
+      # PromptBridge application
+      - ../rag_service:/app
+
+      # Entire RAG data collection project
+      - ../rag_data_collection:/app/rag_data_collection
+
     networks:
       - monitoring
+
     depends_on:
-      - redis
+      redis:
+        condition: service_started
+
+      kafka:
+        condition: service_healthy
+
+      qdrant:
+        condition: service_healthy
+
     restart: unless-stopped
+
+
+  # ── Kafka worker ──────────────────────────────────────────────────────────
+  worker:
+    build:
+      context: ..
+      dockerfile: rag_service/Dockerfile
+
+    container_name: promptbridge_worker
+
+    command:
+      - python
+      - kafka_worker.py
+
+    environment:
+      GROQ_API_KEY: ${GROQ_API_KEY}
+
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_ENABLED: "false"
+
+      PROMPTBRIDGE_DATA_DIR: /app/rag_data_collection/data
+
+      JOB_TTL_SECONDS: 600
+
+      QDRANT_URL: http://qdrant:6333
+
+    volumes:
+      # PromptBridge application
+      - ../rag_service:/app
+
+      # Entire RAG data collection project
+      - ../rag_data_collection:/app/rag_data_collection
+
+    networks:
+      - monitoring
+
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+      redis:
+        condition: service_started
+
+      qdrant:
+        condition: service_healthy
+
+    restart: unless-stopped
+
 
   # ── Redis ─────────────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     container_name: promptbridge_redis
+
     ports:
       - "6379:6379"
-    # Bug #1 fix: persist Redis data across container restarts so L1/L2/L3
-    # cache survives deploys and doesn't fall back to in-memory every time.
+
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes
+
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+
     networks:
       - monitoring
+
     restart: unless-stopped
+
 
   # ── Prometheus ────────────────────────────────────────────────────────────
   prometheus:
     image: prom/prometheus:latest
     container_name: promptbridge_prometheus
+
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
     ports:
       - "9090:9090"
+
     networks:
       - monitoring
+
     restart: unless-stopped
+
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.retention.time=7d"
+
 
   # ── Grafana ───────────────────────────────────────────────────────────────
   grafana:
     image: grafana/grafana:latest
     container_name: promptbridge_grafana
+
     ports:
       - "3000:3000"
+
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=promptbridge
-      - GF_USERS_ALLOW_SIGN_UP=false
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: promptbridge
+      GF_USERS_ALLOW_SIGN_UP: "false"
+
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+
     networks:
       - monitoring
+
     depends_on:
       - prometheus
+
     restart: unless-stopped
 
+
+# ── Network ─────────────────────────────────────────────────────────────────
 networks:
   monitoring:
     driver: bridge
 
+
+# ── Persistent volumes ──────────────────────────────────────────────────────
 volumes:
   grafana_data:
-  redis_data:    # Bug #1 fix: named volume for Redis persistence
+  redis_data:
+  kafka_data:
+  zookeeper_data:
+  zookeeper_log:

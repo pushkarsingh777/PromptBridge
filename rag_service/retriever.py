@@ -21,6 +21,8 @@ from dotenv import load_dotenv
 # pyrefly: ignore [missing-import]
 from qdrant_client import QdrantClient
 # pyrefly: ignore [missing-import]
+from qdrant_client.models import SearchParams
+# pyrefly: ignore [missing-import]
 from rank_bm25 import BM25Okapi
 # pyrefly: ignore [missing-import]
 from sentence_transformers import SentenceTransformer
@@ -39,6 +41,7 @@ _DATA_DIR = Path(
 
 # ── Config ────────────────────────────────────────────────────────────────────
 QDRANT_PATH    = str(_DATA_DIR / "qdrant_db")
+QDRANT_URL     = os.getenv("QDRANT_URL", "")   # e.g. http://qdrant:6333 (Docker)
 CORPUS_PATH    = str(_DATA_DIR / "training_pairs" / "corpus.jsonl")
 COLLECTION     = "promptbridge"
 EMBED_MODEL    = "BAAI/bge-small-en-v1.5"
@@ -46,17 +49,29 @@ DENSE_TOP_K    = 10       # chunks from dense search
 SPARSE_TOP_K   = 10       # chunks from BM25 search
 RRF_K          = 60       # RRF constant (standard value)
 
+# ── HNSW query-time config ──────────────────────────────────────────
+# ef is the search beam width: how many candidate neighbours Qdrant
+# evaluates before returning the final top-k results.
+# • Qdrant default: max(limit, 20) → only 20 candidates for a top-10 query.
+# • 128 gives meaningfully better recall with <10ms overhead per query.
+# Raise to 256 if you observe recall degradation at the cost of more latency.
+HNSW_EF        = 128
+
 # ── Qdrant singleton — only one file lock per process ────────────────────────
-# Local Qdrant uses portalocker for exclusive access; creating a second
-# QdrantClient on the same path (e.g. on uvicorn reload or a new session)
-# raises RuntimeError. Sharing one client across all DualRetriever instances
-# avoids this entirely.
+# In Docker: QDRANT_URL=http://qdrant:6333 → HTTP client (no file lock, safe
+# for concurrent processes like API + worker sharing the same volume).
+# In local dev without the env var: falls back to local on-disk path client.
 _qdrant_client: "QdrantClient | None" = None
 
 def _get_qdrant_client() -> "QdrantClient":
     global _qdrant_client
     if _qdrant_client is None:
-        _qdrant_client = QdrantClient(path=QDRANT_PATH)
+        if QDRANT_URL:
+            _qdrant_client = QdrantClient(url=QDRANT_URL)
+            print(f"  Qdrant mode : HTTP  ({QDRANT_URL})")
+        else:
+            _qdrant_client = QdrantClient(path=QDRANT_PATH)
+            print(f"  Qdrant mode : local ({QDRANT_PATH})")
     return _qdrant_client
 
 class DualRetriever:
@@ -77,6 +92,7 @@ class DualRetriever:
 
         print(f"  Dense index : {self.qdrant.get_collection(COLLECTION).points_count} vectors")
         print(f"  BM25 index  : {len(self.bm25_chunks)} chunks")
+        print(f"  HNSW ef     : {HNSW_EF} (query-time beam width)")
         print("  Retriever ready.\n")
 
     def _cuda_available(self):
@@ -126,6 +142,7 @@ class DualRetriever:
             collection_name=COLLECTION,
             query=query_vector,
             limit=top_k,
+            search_params=SearchParams(hnsw_ef=HNSW_EF),
         ).points
 
         return [

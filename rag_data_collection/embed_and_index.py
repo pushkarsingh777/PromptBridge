@@ -9,7 +9,7 @@ from sentence_transformers import SentenceTransformer
 # pyrefly: ignore [missing-import]
 from qdrant_client import QdrantClient
 # pyrefly: ignore [missing-import]
-from qdrant_client.models import Distance, PointStruct, VectorParams
+from qdrant_client.models import Distance, HnswConfigDiff, PointStruct, VectorParams
 # pyrefly: ignore [missing-import]
 from tqdm import tqdm
 
@@ -82,7 +82,15 @@ def build_index(args: argparse.Namespace) -> None:
     print(f"Loading {args.model} on {device}")
     model = SentenceTransformer(args.model, device=device)
     vector_size = model.get_sentence_embedding_dimension()
-    client = QdrantClient(path=str(db_path))
+
+    # Connect to Qdrant: server URL takes priority over local path.
+    qdrant_url = getattr(args, "qdrant_url", "") or ""
+    if qdrant_url:
+        client = QdrantClient(url=qdrant_url)
+        print(f"Qdrant mode : HTTP server ({qdrant_url})")
+    else:
+        client = QdrantClient(path=str(db_path))
+        print(f"Qdrant mode : local path ({db_path})")
 
     existing = {item.name for item in client.get_collections().collections}
     if args.collection in existing:
@@ -92,10 +100,23 @@ def build_index(args: argparse.Namespace) -> None:
             )
         client.delete_collection(args.collection)
 
+    # ── HNSW index configuration ──────────────────────────────────────────
+    # m            : number of bi-directional links per node in the graph.
+    #                Higher → better recall, more RAM. Sweet spot: 16–32.
+    # ef_construct : candidate list size during graph construction.
+    #                Higher → better graph quality / recall, slower build.
+    #                Default Qdrant value is 100; 200 gives noticeably better
+    #                recall at the cost of ~2× build time (still seconds–minutes).
     client.create_collection(
         collection_name=args.collection,
         vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
+        hnsw_config=HnswConfigDiff(
+            m=args.hnsw_m,
+            ef_construct=args.hnsw_ef_construct,
+            on_disk=False,   # keep graph in RAM for fast startup
+        ),
     )
+    print(f"  HNSW config : m={args.hnsw_m}, ef_construct={args.hnsw_ef_construct}")
 
     for start in tqdm(range(0, len(chunks), args.batch_size), desc="Embedding and indexing"):
         batch = chunks[start : start + args.batch_size]
@@ -127,6 +148,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--recreate", action="store_true", help="Delete and rebuild an existing collection.")
+    parser.add_argument("--hnsw-m",            type=int, default=16,  help="HNSW m: bi-directional links per node (default 16)")
+    parser.add_argument("--hnsw-ef-construct", type=int, default=200, help="HNSW ef_construct: candidate list at build time (default 200)")
+    parser.add_argument("--qdrant-url",         default="",            help="Qdrant server URL (e.g. http://localhost:6333). Overrides --qdrant-path.")
     args = parser.parse_args()
     if args.batch_size < 1:
         parser.error("--batch-size must be positive")
