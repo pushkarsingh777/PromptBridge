@@ -53,12 +53,17 @@ services:
 
       QDRANT_URL: http://qdrant:6333
 
+      DATABASE_PATH: /app/data/memory.db
+
     volumes:
       # PromptBridge application
       - ../rag_service:/app
 
       # Entire RAG data collection project
       - ../rag_data_collection:/app/rag_data_collection
+
+      # SQLite conversation memory — persists across container restarts
+      - sqlite_data:/app/data
 
     networks:
       - monitoring
@@ -69,6 +74,8 @@ services:
 
       qdrant:
         condition: service_healthy
+
+      # SQLite DB is stored on the named volume below (see volumes section)
 
     restart: unless-stopped
 
@@ -93,6 +100,7 @@ services:
       - monitoring
 
     restart: unless-stopped
+
 
 
   # ── Prometheus ────────────────────────────────────────────────────────────
@@ -153,3 +161,4 @@ networks:
 volumes:
   grafana_data:
   redis_data:
+  sqlite_data:
